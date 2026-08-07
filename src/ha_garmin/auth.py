@@ -133,6 +133,17 @@ def _http_post(url: str, **kwargs: Any) -> Any:
     return cffi_requests.post(url, impersonate="chrome", **kwargs)
 
 
+# Garmin's widget MFA page exposes these variables in inline <script> tags.
+_WIDGET_MFA_VARS_RE = re.compile(
+    r'var\s+(customerGuid|mfaMethod|locale|clientId|codeSentTo)\s*=\s*"([^"]*)"\s*;'
+)
+
+
+def _parse_widget_mfa_vars(html: str) -> dict[str, str]:
+    """Extract the inline JS variables Garmin uses for widget MFA."""
+    return {m.group(1): m.group(2) for m in _WIDGET_MFA_VARS_RE.finditer(html)}
+
+
 class GarminAuth:
     """Authentication engine using native DI Bearer tokens."""
 
@@ -326,7 +337,7 @@ class GarminAuth:
         for imp in MOBILE_IMPERSONATIONS:
             try:
                 _LOGGER.debug("mobile+cffi trying impersonation=%s", imp)
-                sess: Any = cffi_requests.Session(impersonate=imp)  # type: ignore[arg-type]
+                sess: Any = cffi_requests.Session(impersonate=imp)
                 return self._do_mobile_login(sess, email, password)
             except (GarminAuthError, GarminMFARequired):
                 raise
@@ -532,11 +543,24 @@ class GarminAuth:
             )
             raise GarminAPIError(f"Widget login: account restricted '{title}'")
 
-        if "mfa" in title_lower or "authentication application" in title_lower:
+        # MFA challenge. The signin page itself is also titled "GARMIN
+        # Authentication Application", so rely on the inline JS variables
+        # Garmin emits for the MFA page (mfaMethod, customerGuid, etc.) rather
+        # than the title alone. Email/SMS MFA pages may not actually send the
+        # code during the credential POST, so we explicitly request delivery via
+        # the same endpoint the browser's "Request a new code" link uses.
+        mfa_vars = _parse_widget_mfa_vars(r.text)
+        mfa_method = mfa_vars.get("mfaMethod", "").lower()
+        looks_like_mfa = "mfa" in title_lower or (
+            "authentication application" in title_lower and mfa_method
+        )
+        if looks_like_mfa:
+            self._widget_request_mfa_code(sess, r.text, r.url)
             self._mfa_session = sess
             self._mfa_login_params = signin_params
             self._mfa_post_headers = {"Referer": r.url}
             self._mfa_flow = "widget"
+            self._mfa_method = mfa_vars.get("mfaMethod", "")
             self._widget_last_resp = r
             raise GarminMFARequired("mfa_required")
 
@@ -592,6 +616,50 @@ class GarminAuth:
             ticket_match.group(1), service_url=f"{self._sso}/sso/embed"
         )
 
+    def _widget_request_mfa_code(self, sess: Any, page_html: str, referer: str) -> None:
+        """Request Garmin to send an email/SMS MFA code for this widget session.
+
+        The widget's own JavaScript calls ``/sso/verifyMFA/mfaCode`` when the
+        user clicks "Request a new code". We use the same endpoint to ensure
+        the code is actually delivered before prompting the user.
+        """
+        mfa_vars = _parse_widget_mfa_vars(page_html)
+        mfa_method = mfa_vars.get("mfaMethod", "").lower()
+        if mfa_method not in ("email", "sms"):
+            # Nothing to trigger for TOTP/authenticator apps.
+            return
+
+        if mfa_vars.get("codeSentTo"):
+            # Garmin already sent a code during the signin POST.
+            return
+
+        client_id = mfa_vars.get("clientId", "")
+        payload = {
+            "customerGuid": mfa_vars.get("customerGuid", ""),
+            "mfaMethod": mfa_vars.get("mfaMethod", ""),
+            "locale": mfa_vars.get("locale", ""),
+        }
+
+        _LOGGER.debug(
+            "Widget MFA: explicitly requesting %s code from Garmin", mfa_method
+        )
+        r = sess.post(
+            f"{self._sso}/sso/verifyMFA/mfaCode",
+            params={"clientId": client_id},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/plain, */*",
+                "Referer": referer,
+            },
+            json=payload,
+            timeout=30,
+        )
+
+        if r.status_code == 429:
+            raise GarminRateLimitError("Widget MFA code request returned 429")
+        if not r.ok:
+            raise GarminAPIError(f"Widget MFA code request returned {r.status_code}")
+
     # ------------------------------------------------------------------ #
     #  STRATEGY 4 — Portal web + curl_cffi (TLS fingerprint rotation)    #
     # ------------------------------------------------------------------ #
@@ -606,7 +674,7 @@ class GarminAuth:
         for imp in PORTAL_IMPERSONATIONS:
             try:
                 _LOGGER.debug("portal+cffi trying impersonation=%s", imp)
-                sess: Any = cffi_requests.Session(impersonate=imp)  # type: ignore[arg-type]
+                sess: Any = cffi_requests.Session(impersonate=imp)
                 return self._do_portal_web_login(sess, email, password)
             except (GarminAuthError, GarminMFARequired):
                 raise

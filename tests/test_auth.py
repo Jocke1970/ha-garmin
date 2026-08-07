@@ -151,10 +151,27 @@ class TestGarminAuth:
         assert result is False
 
     # ------------------------------------------------------------------ #
-    #  Widget MFA title detection                                         #
+    #  Widget MFA detection & OTP delivery                                #
     # ------------------------------------------------------------------ #
 
-    def _widget_session(self, post_title: str) -> MagicMock:
+    def _widget_mfa_page(
+        self, title: str, mfa_method: str = "", code_sent_to: str = ""
+    ) -> str:
+        """Build a widget MFA page with the inline JS vars Garmin emits."""
+        vars_ = [
+            'var customerGuid = "cg-123";',
+            f'var mfaMethod = "{mfa_method}";',
+            'var locale = "en-US";',
+            'var clientId = "";',
+        ]
+        if code_sent_to:
+            vars_.append(f'var codeSentTo = "{code_sent_to}";')
+        return (
+            f"<html><head><title>{title}</title></head><body>"
+            f"<script>{' '.join(vars_)}</script></body></html>"
+        )
+
+    def _widget_session(self, post_title: str, mfa_method: str = "") -> MagicMock:
         """Mock cffi Session that drives _widget_web_login to the POST response."""
         embed_resp = MagicMock(status_code=200, ok=True, text="<html></html>")
         signin_resp = MagicMock(
@@ -165,36 +182,87 @@ class TestGarminAuth:
         )
         post_resp = MagicMock(
             status_code=200,
-            text=f"<html><title>{post_title}</title></html>",
+            text=self._widget_mfa_page(post_title, mfa_method),
         )
         sess = MagicMock()
         sess.get.side_effect = [embed_resp, signin_resp]
         sess.post.return_value = post_resp
         return sess
 
-    def test_widget_totp_mfa_title_raises_mfa_required(self):
+    def test_widget_totp_mfa_title_raises_mfa_required(self) -> None:
         """TOTP MFA title ('Enter MFA code for login') triggers GarminMFARequired."""
         auth = GarminAuth()
-        sess = self._widget_session("Enter MFA code for login")
+        sess = self._widget_session("Enter MFA code for login", mfa_method="totp")
         with (
             patch("ha_garmin.auth.cffi_requests.Session", return_value=sess),
             patch("time.sleep"),
             pytest.raises(GarminMFARequired),
         ):
             auth._widget_web_login("u@x.com", "pw")
+        assert not any(
+            "/sso/verifyMFA/mfaCode" in call.args[0]
+            for call in sess.post.call_args_list
+        )
 
-    def test_widget_email_mfa_title_raises_mfa_required(self):
-        """Email MFA title ('GARMIN Authentication Application') triggers GarminMFARequired."""
+    def test_widget_email_mfa_title_requests_code(self) -> None:
+        """Email MFA title triggers GarminMFARequired and requests a code."""
+        auth = GarminAuth()
+        sess = self._widget_session(
+            "GARMIN Authentication Application", mfa_method="email"
+        )
+        with (
+            patch("ha_garmin.auth.cffi_requests.Session", return_value=sess),
+            patch("time.sleep"),
+            pytest.raises(GarminMFARequired),
+        ):
+            auth._widget_web_login("u@x.com", "pw")
+        assert any(
+            "/sso/verifyMFA/mfaCode" in call.args[0]
+            for call in sess.post.call_args_list
+        )
+
+    def test_widget_email_mfa_already_sent_no_request(self) -> None:
+        """If Garmin already sent a code, do not request another one."""
+        auth = GarminAuth()
+        page = self._widget_mfa_page(
+            "Enter MFA code for login",
+            mfa_method="email",
+            code_sent_to="u@example.com",
+        )
+        embed_resp = MagicMock(status_code=200, ok=True, text="<html></html>")
+        signin_resp = MagicMock(
+            status_code=200,
+            ok=True,
+            text='<input name="_csrf" value="tok">',
+            url="https://sso.garmin.com/sso/signin",
+        )
+        post_resp = MagicMock(status_code=200, text=page)
+        sess = MagicMock()
+        sess.get.side_effect = [embed_resp, signin_resp]
+        sess.post.return_value = post_resp
+        with (
+            patch("ha_garmin.auth.cffi_requests.Session", return_value=sess),
+            patch("time.sleep"),
+            pytest.raises(GarminMFARequired),
+        ):
+            auth._widget_web_login("u@x.com", "pw")
+        assert not any(
+            "/sso/verifyMFA/mfaCode" in call.args[0]
+            for call in sess.post.call_args_list
+        )
+
+    def test_widget_bare_signin_title_not_mfa(self) -> None:
+        """The bare signin page title must not be mistaken for an MFA challenge."""
         auth = GarminAuth()
         sess = self._widget_session("GARMIN Authentication Application")
         with (
             patch("ha_garmin.auth.cffi_requests.Session", return_value=sess),
             patch("time.sleep"),
-            pytest.raises(GarminMFARequired),
+            pytest.raises(GarminAPIError, match="unexpected title"),
         ):
             auth._widget_web_login("u@x.com", "pw")
 
-    def test_widget_unrelated_title_raises_api_error(self):
+    def test_widget_unrelated_title_raises_api_error(self) -> None:
         """An unrecognised title raises GarminAPIError, not GarminMFARequired."""
         auth = GarminAuth()
         sess = self._widget_session("Some Random Page")
