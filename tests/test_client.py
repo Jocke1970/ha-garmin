@@ -1,12 +1,12 @@
 """Tests for GarminClient."""
 
 from datetime import UTC, date, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
 from ha_garmin import GarminAuth, GarminClient
-from ha_garmin.exceptions import GarminAuthError
+from ha_garmin.exceptions import GarminAPIError, GarminAuthError
 
 
 def _make_auth(di_token: str = "fake_di_token") -> GarminAuth:
@@ -518,6 +518,96 @@ class TestGarminClient:
         assert data["optimalBedtime"] == datetime(2026, 4, 12, 20, 40, tzinfo=UTC)
         assert data["wakeTime"] == datetime(2026, 4, 12, 3, 57, 47, tzinfo=UTC)
         assert data["optimalWakeTime"] == datetime(2026, 4, 13, 4, 30, tzinfo=UTC)
+
+    async def test_fetch_core_data_transient_error_does_not_use_yesterday(self):
+        """Test a transient 502/503 does not get papered over with yesterday's summary.
+
+        Regression test for cyberjunky/home-assistant-garmin_connect#536: a
+        transient API failure while fetching today's summary must not be
+        treated the same as "today's data isn't ready yet", or fast-changing
+        fields like body battery briefly flip to a stale, day-old value.
+        """
+        auth = _make_auth()
+        client = GarminClient(auth)
+
+        yesterday_summary = {
+            "dailyStepGoal": 10000,
+            "bodyBatteryMostRecentValue": 33,
+        }
+
+        async def fake_get_summary(target_date):
+            if target_date == date(2026, 4, 12):
+                raise GarminAPIError("Server error 502 after 3 retries", 502)
+            return yesterday_summary
+
+        with (
+            patch.object(
+                client,
+                "_get_user_summary_raw",
+                new_callable=AsyncMock,
+                side_effect=fake_get_summary,
+            ) as mock_summary,
+            patch.object(
+                client, "get_daily_steps", new_callable=AsyncMock
+            ) as mock_steps,
+            patch.object(
+                client, "_get_sleep_data_raw", new_callable=AsyncMock
+            ) as mock_sleep,
+        ):
+            mock_steps.return_value = None
+            mock_sleep.return_value = None
+            data = await client.fetch_core_data(date(2026, 4, 12))
+
+        # Today's failed fetch must not be silently replaced by yesterday's
+        # full summary - the stale body battery value must not leak through.
+        mock_summary.assert_awaited_once_with(date(2026, 4, 12))
+        assert "bodyBatteryMostRecentValue" not in data
+        assert "dailyStepGoal" not in data
+
+    async def test_fetch_core_data_midnight_fallback_still_works(self):
+        """Test the legitimate "today not ready yet" fallback to yesterday still works.
+
+        When today's endpoint responds but has no data yet (e.g. right after
+        midnight, before Garmin rolls the calendar day over), falling back to
+        yesterday's summary is intentional and must keep working.
+        """
+        auth = _make_auth()
+        client = GarminClient(auth)
+
+        yesterday_summary = {
+            "dailyStepGoal": 10000,
+            "bodyBatteryMostRecentValue": 87,
+        }
+
+        async def fake_get_summary(target_date):
+            if target_date == date(2026, 4, 12):
+                return {}
+            return yesterday_summary
+
+        with (
+            patch.object(
+                client,
+                "_get_user_summary_raw",
+                new_callable=AsyncMock,
+                side_effect=fake_get_summary,
+            ) as mock_summary,
+            patch.object(
+                client, "get_daily_steps", new_callable=AsyncMock
+            ) as mock_steps,
+            patch.object(
+                client, "_get_sleep_data_raw", new_callable=AsyncMock
+            ) as mock_sleep,
+        ):
+            mock_steps.return_value = None
+            mock_sleep.return_value = None
+            data = await client.fetch_core_data(date(2026, 4, 12))
+
+        assert mock_summary.await_args_list == [
+            call(date(2026, 4, 12)),
+            call(date(2026, 4, 11)),
+        ]
+        assert data["bodyBatteryMostRecentValue"] == 87
+        assert data["dailyStepGoal"] == 10000
 
     async def test_request_returns_empty_on_204(self):
         """Test _request returns empty dict on 204 No Content."""

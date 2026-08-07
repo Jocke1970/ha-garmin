@@ -2129,9 +2129,26 @@ class GarminClient:
         yesterday_date = target_date - timedelta(days=1)
         week_ago = target_date - timedelta(days=7)
 
-        # Core summary with midnight fallback
-        summary_raw = await self._safe_call(self._get_user_summary_raw, target_date)
-        today_data_not_ready = (
+        # Core summary with midnight fallback.
+        #
+        # The yesterday fallback only makes sense when today's endpoint
+        # answered but genuinely has nothing yet (e.g. right after midnight,
+        # before Garmin has rolled the calendar day; this surfaces as an
+        # empty {} or a summary without dailyStepGoal). A transient failure
+        # (5xx after retries, network error) is not the same thing and must
+        # not be treated as "not ready" - otherwise a temporary Garmin
+        # outage would silently overwrite all of today's data, including
+        # fast-changing fields like body battery, with a full day-old
+        # snapshot (cyberjunky/home-assistant-garmin_connect#536).
+        try:
+            summary_raw = await self._get_user_summary_raw(target_date)
+            today_fetch_failed = False
+        except GarminAPIError as err:
+            _LOGGER.warning("API call %s failed: %s", "_get_user_summary_raw", err)
+            summary_raw = None
+            today_fetch_failed = True
+
+        today_data_not_ready = not today_fetch_failed and (
             not summary_raw or summary_raw.get("dailyStepGoal") is None
         )
 
