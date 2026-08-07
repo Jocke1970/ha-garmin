@@ -145,6 +145,102 @@ class TestGarminClient:
         assert data["lastActivity"]["eBikeMaxAssistModes"] == 7
         assert "eBikeAssistModeInfoDTOList" not in data["lastActivity"]
 
+    async def test_fetch_activity_data_ebike_fields_retry_after_empty_poll(self):
+        """Test an empty e-bike summary is not cached negatively forever (#527).
+
+        A new activity's summary can lag behind Garmin's backend, so the
+        first poll may come back without e-bike fields even though the
+        activity does have them. The next poll for the same activity must
+        retry the summary call and surface the fields once they appear,
+        instead of being stuck with the first, empty result.
+        """
+        auth = _make_auth()
+        client = GarminClient(auth)
+
+        ride = {
+            "activityId": 9,
+            "activityName": "E-Bike Ride",
+            "activityType": {"typeKey": "e_bike_fitness"},
+            "hasPolyline": False,
+        }
+        empty_summary = {"activityId": 9}
+        full_summary = {
+            "activityId": 9,
+            "eBikeBatteryRemaining": 55,
+            "eBikeBatteryUsage": 12,
+            "eBikeMaxAssistModes": 5,
+        }
+
+        with (
+            patch.object(client, "get_activities", new_callable=AsyncMock) as mock_acts,
+            patch.object(
+                client, "get_activity", new_callable=AsyncMock
+            ) as mock_summary,
+            patch.object(
+                client, "get_workouts", new_callable=AsyncMock
+            ) as mock_workouts,
+            patch.object(
+                client, "get_activity_hr_in_timezones", new_callable=AsyncMock
+            ) as mock_hr,
+        ):
+            mock_acts.return_value = [ride]
+            mock_workouts.return_value = []
+            mock_hr.return_value = []
+
+            mock_summary.return_value = empty_summary
+            first_poll = await client.fetch_activity_data()
+
+            mock_summary.return_value = full_summary
+            second_poll = await client.fetch_activity_data()
+
+        assert "eBikeBatteryRemaining" not in first_poll["lastActivity"]
+        assert second_poll["lastActivity"]["eBikeBatteryRemaining"] == 55
+        assert second_poll["lastActivity"]["eBikeBatteryUsage"] == 12
+        assert second_poll["lastActivity"]["eBikeMaxAssistModes"] == 5
+        assert mock_summary.await_count == 2
+
+    async def test_fetch_activity_data_ebike_fields_empty_retry_is_bounded(self):
+        """Test a genuinely e-bike-field-less ride stops being retried.
+
+        A regular (non ANT+ LEV) bike ride never gets e-bike fields from
+        the summary endpoint. After a few empty polls the cache should
+        stop calling the summary endpoint on every single poll, so a
+        normal bike isn't penalized with an extra API call forever.
+        """
+        auth = _make_auth()
+        client = GarminClient(auth)
+
+        ride = {
+            "activityId": 10,
+            "activityName": "Regular Bike Ride",
+            "activityType": {"typeKey": "cycling"},
+            "hasPolyline": False,
+        }
+
+        with (
+            patch.object(client, "get_activities", new_callable=AsyncMock) as mock_acts,
+            patch.object(
+                client, "get_activity", new_callable=AsyncMock
+            ) as mock_summary,
+            patch.object(
+                client, "get_workouts", new_callable=AsyncMock
+            ) as mock_workouts,
+            patch.object(
+                client, "get_activity_hr_in_timezones", new_callable=AsyncMock
+            ) as mock_hr,
+        ):
+            mock_acts.return_value = [ride]
+            mock_summary.return_value = {"activityId": 10}
+            mock_workouts.return_value = []
+            mock_hr.return_value = []
+
+            retry_limit = client._EBIKE_FIELDS_EMPTY_RETRY_LIMIT
+            for _ in range(retry_limit + 3):
+                data = await client.fetch_activity_data()
+
+        assert "eBikeBatteryRemaining" not in data["lastActivity"]
+        assert mock_summary.await_count == retry_limit
+
     async def test_fetch_activity_data_skips_summary_for_non_rides(self):
         """Test fetch_activity_data does not fetch the summary for non-ride activities."""
         auth = _make_auth()

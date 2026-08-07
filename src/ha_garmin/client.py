@@ -651,7 +651,8 @@ class GarminClient:
         self._is_cn = is_cn
         self._base_url = GARMIN_CN_CONNECT_API if is_cn else GARMIN_CONNECT_API
         self._profile_cache: UserProfile | None = None
-        self._ebike_fields_cache: tuple[int, dict[str, Any]] | None = None
+        # (activity_id, fields, consecutive_empty_polls)
+        self._ebike_fields_cache: tuple[int, dict[str, Any], int] | None = None
 
     def _get_url(self, url: str) -> str:
         """Resolve URL to correct connectapi domain."""
@@ -1047,18 +1048,40 @@ class GarminClient:
         data = await self._request("GET", url)
         return data if isinstance(data, dict) else {}
 
+    # How many consecutive empty polls to accept for a given activity before
+    # treating it as a ride that genuinely has no e-bike data (e.g. a normal
+    # bike, not an ANT+ LEV e-bike). Below this threshold, an empty result is
+    # re-fetched on the next poll instead of being cached, since Garmin's
+    # backend can take a poll or two to propagate the summary fields for a
+    # brand-new activity (#527). Once the threshold is hit, the empty result
+    # is cached like a hit would be, so a normal bike doesn't pay for an
+    # extra API call on every single poll forever.
+    _EBIKE_FIELDS_EMPTY_RETRY_LIMIT = 3
+
     async def _get_ebike_fields(self, activity_id: int) -> dict[str, Any]:
         """Fetch e-bike fields from the activity summary endpoint.
 
         The list endpoint never includes them (issue
         home-assistant-garmin_connect#527). Cached per activity, so it
-        costs one extra API call per new ride, not per poll.
+        costs one extra API call per new ride, not per poll -- except a
+        handful of retries right after a new activity appears, in case
+        Garmin hasn't yet propagated the fields to the summary endpoint
+        (see _EBIKE_FIELDS_EMPTY_RETRY_LIMIT). An empty result is never
+        cached indefinitely on the first miss, so a slow backend doesn't
+        permanently poison the cache for that activity.
         """
+        cached_empty_polls = 0
         if (
             self._ebike_fields_cache is not None
             and self._ebike_fields_cache[0] == activity_id
         ):
-            return self._ebike_fields_cache[1]
+            cached_fields = self._ebike_fields_cache[1]
+            cached_empty_polls = self._ebike_fields_cache[2]
+            if (
+                cached_fields
+                or cached_empty_polls >= self._EBIKE_FIELDS_EMPTY_RETRY_LIMIT
+            ):
+                return cached_fields
 
         summary = await self._safe_call(self.get_activity, activity_id) or {}
         # Fields have been observed at the top level; check summaryDTO too
@@ -1068,7 +1091,8 @@ class GarminClient:
             for key in EBIKE_ACTIVITY_KEYS
             if source.get(key) is not None
         }
-        self._ebike_fields_cache = (activity_id, fields)
+        empty_polls = 0 if fields else cached_empty_polls + 1
+        self._ebike_fields_cache = (activity_id, fields, empty_polls)
         return fields
 
     async def get_activity_details(
