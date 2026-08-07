@@ -19,7 +19,7 @@ import random
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from curl_cffi import requests as cffi_requests
 
@@ -337,7 +337,7 @@ class GarminAuth:
         for imp in MOBILE_IMPERSONATIONS:
             try:
                 _LOGGER.debug("mobile+cffi trying impersonation=%s", imp)
-                sess: Any = cffi_requests.Session(impersonate=imp)
+                sess: Any = cffi_requests.Session(impersonate=cast(Any, imp))
                 return self._do_mobile_login(sess, email, password)
             except (GarminAuthError, GarminMFARequired):
                 raise
@@ -674,7 +674,7 @@ class GarminAuth:
         for imp in PORTAL_IMPERSONATIONS:
             try:
                 _LOGGER.debug("portal+cffi trying impersonation=%s", imp)
-                sess: Any = cffi_requests.Session(impersonate=imp)
+                sess: Any = cffi_requests.Session(impersonate=cast(Any, imp))
                 return self._do_portal_web_login(sess, email, password)
             except (GarminAuthError, GarminMFARequired):
                 raise
