@@ -17,6 +17,7 @@ import logging
 import os
 import random
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, cast
@@ -39,6 +40,41 @@ from .exceptions import (
 from .models import AuthResult
 
 _LOGGER = logging.getLogger(__name__)
+
+# Detect ~username expansion that would point into another user's home directory.
+_OTHER_USER_HOME_RE = re.compile(r"^~[^/\\]")
+
+
+def token_file_path(path: str | Path) -> Path:
+    """Return the token file represented by a directory or JSON path.
+
+    Rejects paths that expand into another user's home directory via
+    ``~username`` syntax. Bare ``~`` and ``~/...`` are allowed because they
+    resolve to the current user's home.
+
+    Also rejects symlinked tokenstore paths so a pre-planted symlink cannot
+    redirect load/save to an attacker-controlled location.
+    """
+    path_str = str(path)
+    if _OTHER_USER_HOME_RE.match(path_str):
+        raise ValueError(
+            f"Token path must not reference another user's home directory: {path_str!r}"
+        )
+    token_path = Path(path_str).expanduser()
+    # Reject symlinks on the tokenstore path or its immediate parent
+    # (e.g. ~/.garminconnect -> /attacker/dir).
+    for check_path in (token_path, token_path.parent):
+        try:
+            if check_path.is_symlink():
+                raise ValueError(f"Token path must not be a symlink: {path_str!r}")
+        except OSError as e:
+            raise ValueError(
+                f"Token path cannot be checked for symlinks: {path_str!r}"
+            ) from e
+    if token_path.is_dir() or token_path.suffix.casefold() != ".json":
+        return token_path / ".garmin_tokens.json"
+    return token_path
+
 
 # -- iOS mobile app constants --
 IOS_SSO_CLIENT_ID = "GCM_IOS_DARK"
@@ -165,6 +201,13 @@ class GarminAuth:
         self.di_client_id: str | None = None
 
         self._tokenstore_path: str | None = None
+        # Serialize token refresh and state mutation so concurrent API calls can't
+        # race on the same refresh token or observe half-updated state.
+        self._token_lock: threading.RLock = threading.RLock()
+        # True when a login strategy has raised GarminMFARequired and MFA state
+        # is held on this instance. Prevents interleaving another login on the
+        # same instance while MFA is pending.
+        self._mfa_pending = False
 
     @property
     def is_authenticated(self) -> bool:
@@ -191,6 +234,21 @@ class GarminAuth:
         self.di_token = None
         self.di_refresh_token = None
         self.di_client_id = None
+        self._clear_mfa_state()
+
+    def _clear_mfa_state(self) -> None:
+        """Clear pending MFA state so a new login can start."""
+        self._mfa_pending = False
+        for attr in (
+            "_mfa_session",
+            "_mfa_login_params",
+            "_mfa_post_headers",
+            "_mfa_service_url",
+            "_mfa_flow",
+            "_mfa_method",
+            "_widget_last_resp",
+        ):
+            setattr(self, attr, None)
 
     def _verify_token(self) -> bool:
         """Confirm the current token is accepted by the API tier.
@@ -252,6 +310,11 @@ class GarminAuth:
         (429 rate limits, transport errors, HTML challenges) fall through to
         the next strategy.
         """
+        if self._mfa_pending:
+            raise GarminAuthError(
+                "MFA login already in progress; complete it with complete_mfa() "
+                "or call logout() first"
+            )
         # CN SSO does not support the mobile API endpoint, so web-based
         # strategies must run first.  For .com accounts the mobile strategies
         # stay at the front because they bypass Cloudflare more reliably.
@@ -420,6 +483,7 @@ class GarminAuth:
             self._mfa_post_headers = login_headers
             self._mfa_service_url = IOS_SERVICE_URL
             self._mfa_flow = "ios"
+            self._mfa_pending = True
             raise GarminMFARequired("mfa_required")
 
         if resp_type == "SUCCESSFUL":
@@ -562,6 +626,7 @@ class GarminAuth:
             self._mfa_flow = "widget"
             self._mfa_method = mfa_vars.get("mfaMethod", "")
             self._widget_last_resp = r
+            self._mfa_pending = True
             raise GarminMFARequired("mfa_required")
 
         if title != "Success":
@@ -793,6 +858,7 @@ class GarminAuth:
             self._mfa_post_headers = post_headers
             self._mfa_service_url = self._portal_service_url
             self._mfa_flow = "portal"
+            self._mfa_pending = True
             raise GarminMFARequired("mfa_required")
 
         if resp_type == "SUCCESSFUL":
@@ -822,14 +888,20 @@ class GarminAuth:
         """Complete MFA verification."""
         if not hasattr(self, "_mfa_session"):
             raise GarminAuthError("No pending MFA session")
-        self._complete_mfa(mfa_code)
-        # The MFA session is tied to one strategy, so there's no fall-through
-        # here — but still fail loudly rather than store a token the API tier
-        # rejects (see _verify_token / issue context).
-        if not self._verify_token():
-            self._clear_auth_state()
-            raise GarminAuthError("Token rejected by API tier after MFA")
-        return AuthResult(success=True)
+        try:
+            self._complete_mfa(mfa_code)
+            # The MFA session is tied to one strategy, so there's no fall-through
+            # here — but still fail loudly rather than store a token the API tier
+            # rejects (see _verify_token / issue context).
+            if not self._verify_token():
+                self._clear_auth_state()
+                self._clear_mfa_state()
+                raise GarminAuthError("Token rejected by API tier after MFA")
+            return AuthResult(success=True)
+        finally:
+            # Always clear the pending MFA flag and per-attempt state so a new
+            # login can start after complete_mfa() finishes (success or failure).
+            self._clear_mfa_state()
 
     def _complete_mfa(self, mfa_code: str) -> None:
         """Complete MFA — uses the endpoint matching the login flow that triggered it.
@@ -1012,8 +1084,11 @@ class GarminAuth:
 
     def _refresh_di_token(self) -> None:
         """Refresh the DI Bearer token using the stored refresh token."""
-        if not self.di_refresh_token or not self.di_client_id:
-            raise GarminAuthError("No DI refresh token available")
+        with self._token_lock:
+            if not self.di_refresh_token or not self.di_client_id:
+                raise GarminAuthError("No DI refresh token available")
+            refresh_token = self.di_refresh_token
+            client_id = self.di_client_id
         r = _http_post(
             self._di_token_url,
             headers=_native_headers(
@@ -1026,8 +1101,8 @@ class GarminAuth:
             ),
             data={
                 "grant_type": "refresh_token",
-                "client_id": self.di_client_id,
-                "refresh_token": self.di_refresh_token,
+                "client_id": client_id,
+                "refresh_token": refresh_token,
             },
             timeout=30,
         )
@@ -1052,14 +1127,44 @@ class GarminAuth:
             return False
 
         try:
-            await asyncio.to_thread(self._refresh_di_token)
-            if self._tokenstore_path:
-                with contextlib.suppress(Exception):
-                    self.save_session(self._tokenstore_path)
+            await asyncio.to_thread(self._refresh_with_lock)
             return True
         except Exception as err:
             _LOGGER.debug("DI token refresh failed: %s", err)
         return False
+
+    def _sync_refresh_if_needed(self) -> None:
+        """Synchronously refresh the token if it expires soon.
+
+        This is meant to be called from async code via asyncio.to_thread so
+        the check-then-refresh sequence is atomic under the instance token lock.
+        """
+        with self._token_lock:
+            if self._token_expires_soon():
+                self._refresh_with_lock()
+
+    def _refresh_with_lock(self) -> None:
+        """Synchronous token refresh guarded by the instance token lock."""
+        with self._token_lock:
+            self._refresh_di_token()
+            if self._tokenstore_path:
+                self._persist_tokens(self._tokenstore_path)
+
+    def _persist_tokens(self, path: str | None) -> None:
+        """Persist tokens to *path*, logging a warning when the write fails.
+
+        Previously these writes were wrapped in ``contextlib.suppress(Exception)``,
+        which hid disk-full / permission-denied / read-only-filesystem errors and
+        made automated setups fail silently on restart. We still swallow the error
+        (login/refresh should continue) but now log it at WARNING so operators can
+        diagnose the loss of persisted credentials.
+        """
+        if not path:
+            return
+        try:
+            self.save_session(path)
+        except Exception as err:
+            _LOGGER.warning("Failed to persist tokens to %s: %s", path, err)
 
     # ------------------------------------------------------------------ #
     #  SESSION PERSISTENCE                                                #
@@ -1080,9 +1185,7 @@ class GarminAuth:
             if v is not None
         }
 
-        p = Path(path).expanduser()
-        if p.is_dir() or not str(p).endswith(".json"):
-            p = p / ".garmin_tokens.json"
+        p = token_file_path(path)
         # The token file holds the DI refresh token (persistent account access),
         # so write it owner-only (0o600) inside a 0o700 directory regardless of
         # the process umask — a permissive umask must not leave it world-readable
@@ -1105,14 +1208,20 @@ class GarminAuth:
 
     def load_session(self, path: str | Path) -> bool:
         """Load tokens from disk."""
-        p = Path(path).expanduser()
-        if p.is_dir() or not str(p).endswith(".json"):
-            p = p / ".garmin_tokens.json"
+        try:
+            p = token_file_path(path)
+        except ValueError:
+            return False
         if not p.exists():
             return False
 
         try:
-            data = json.loads(p.read_text())
+            flags = os.O_RDONLY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(p, flags)
+            with os.fdopen(fd, encoding="utf-8") as token_file:
+                data = json.loads(token_file.read())
             self._tokenstore_path = str(path)
             self.di_token = data.get("token")
             self.di_refresh_token = data.get("refresh_token")
