@@ -57,6 +57,29 @@ from .models import UserProfile
 if TYPE_CHECKING:
     from .auth import GarminAuth
 
+
+def _validate_positive_int(value: Any, name: str) -> int:
+    """Validate a value is a positive integer suitable for a URL path segment."""
+    try:
+        validated = int(value)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}") from e
+    if validated <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}")
+    return validated
+
+
+def _validate_uuid(value: str, name: str) -> str:
+    """Validate a value is a UUID-like string suitable for a URL path segment."""
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a UUID string, got {value!r}")
+    value = value.strip()
+    # Allow standard UUID forms and Garmin's typical 32-char hex UUIDs.
+    normalized = value.replace("-", "")
+    if len(normalized) != 32 or not all(c in "0123456789abcdefABCDEF" for c in normalized):
+        raise ValueError(f"{name} must be a valid UUID, got {value!r}")
+    return value
+
 _LOGGER = logging.getLogger(__name__)
 
 # Essential keys to keep when trimming activity data
@@ -659,6 +682,23 @@ class GarminClient:
         domain = "garmin.cn" if self._is_cn else "garmin.com"
         return url.replace(GARMIN_CONNECT_API, f"https://connectapi.{domain}")
 
+    async def _ensure_token_fresh(self) -> None:
+        """Atomically check token expiry and refresh if needed.
+
+        Runs the check-then-refresh sequence under the auth object's token lock
+        in a thread so concurrent async tasks cannot trigger refresh with the
+        same refresh token.
+        """
+        if not self._auth._token_expires_soon():
+            return
+
+        def _check() -> None:
+            with self._auth._token_lock:
+                if self._auth._token_expires_soon():
+                    self._auth._refresh_with_lock()
+
+        await asyncio.to_thread(_check)
+
     async def _request(
         self,
         method: str,
@@ -684,9 +724,7 @@ class GarminClient:
             raise GarminAuthError("Not authenticated")
 
         # Proactively refresh if token is expiring soon
-        if self._auth._token_expires_soon():
-            _LOGGER.debug("Token expiring soon, refreshing proactively")
-            await self._auth.refresh_session()
+        await self._ensure_token_fresh()
 
         # Apply CN domain + DI token URL routing
         url = self._get_url(url)
@@ -797,9 +835,8 @@ class GarminClient:
         if not self._auth.is_authenticated:
             raise GarminAuthError("Not authenticated")
 
-        if self._auth._token_expires_soon():
-            _LOGGER.debug("Token expiring soon, refreshing proactively")
-            await self._auth.refresh_session()
+        # Proactively refresh if token is expiring soon
+        await self._ensure_token_fresh()
 
         full_url = self._get_url(url)
 
@@ -1044,6 +1081,7 @@ class GarminClient:
         Unlike the activities list, this response carries the e-bike
         (ANT+ LEV) fields such as eBikeBatteryRemaining.
         """
+        _validate_positive_int(activity_id, "activity_id")
         url = f"{ACTIVITY_DETAILS_URL}/{activity_id}"
         data = await self._request("GET", url)
         return data if isinstance(data, dict) else {}
@@ -1099,6 +1137,7 @@ class GarminClient:
         self, activity_id: int, max_chart_size: int = 100, max_poly_size: int = 4000
     ) -> dict[str, Any]:
         """Get detailed activity information including polyline."""
+        _validate_positive_int(activity_id, "activity_id")
         url = f"{ACTIVITY_DETAILS_URL}/{activity_id}/details"
         params = {"maxChartSize": max_chart_size, "maxPolylineSize": max_poly_size}
         data = await self._request("GET", url, params=params)
@@ -1112,6 +1151,7 @@ class GarminClient:
         Returns a list of HR zones with time spent in each zone.
         Example: [{"zoneName": "Zone 1", "secsInZone": 300}, ...]
         """
+        _validate_positive_int(activity_id, "activity_id")
         url = f"{ACTIVITY_DETAILS_URL}/{activity_id}/hrTimeInZones"
         data = await self._request("GET", url)
         return data if isinstance(data, list) else []
@@ -1236,6 +1276,7 @@ class GarminClient:
         solarInputReadings (solarUtilization %, activityTimeGainMs) per reading.
         Empty dict for devices without solar charging.
         """
+        _validate_positive_int(device_id, "device_id")
         if target_date is None:
             target_date = date.today()
 
@@ -1283,6 +1324,7 @@ class GarminClient:
 
     async def get_gear_stats(self, gear_uuid: str) -> dict[str, Any]:
         """Get gear statistics."""
+        _validate_uuid(gear_uuid, "gear_uuid")
         url = f"{GEAR_STATS_URL}/{gear_uuid}"
         data = await self._request("GET", url)
         return data if isinstance(data, dict) else {}
@@ -1419,6 +1461,7 @@ class GarminClient:
 
     async def get_device_settings(self, device_id: int) -> dict[str, Any]:
         """Get device settings for a specific device."""
+        _validate_positive_int(device_id, "device_id")
         url = f"{GARMIN_CONNECT_API}/device-service/deviceservice/device-info/settings/{device_id}"
         data = await self._request("GET", url)
         return data if isinstance(data, dict) else {}
@@ -1462,8 +1505,8 @@ class GarminClient:
 
         if not self._auth.is_authenticated:
             raise GarminAuthError("Not authenticated")
-        if self._auth._token_expires_soon():
-            await self._auth.refresh_session()
+        # Proactively refresh if token is expiring soon
+        await self._ensure_token_fresh()
 
         headers = self._auth.get_api_headers()
         headers.update(DEFAULT_HEADERS)
@@ -1510,8 +1553,8 @@ class GarminClient:
 
         if not self._auth.is_authenticated:
             raise GarminAuthError("Not authenticated")
-        if self._auth._token_expires_soon():
-            await self._auth.refresh_session()
+        # Proactively refresh if token is expiring soon
+        await self._ensure_token_fresh()
 
         headers = self._auth.get_api_headers()
         headers.update(DEFAULT_HEADERS)
@@ -1915,6 +1958,7 @@ class GarminClient:
         """
         if not gear_uuid:
             raise ValueError("gear_uuid is required - target a gear sensor entity")
+        _validate_uuid(gear_uuid, "gear_uuid")
 
         _LOGGER.debug(
             "set_active_gear called: activity_type=%s, setting=%s, gear_uuid=%s",
@@ -2009,6 +2053,7 @@ class GarminClient:
         Returns:
             Raw file bytes.
         """
+        _validate_positive_int(activity_id, "activity_id")
         fmt = file_format.lower()
         allowed_formats = {"fit", "original", "tcx", "gpx", "kml", "csv"}
         if fmt not in allowed_formats:
@@ -2137,6 +2182,8 @@ class GarminClient:
             gear_uuid: UUID of the gear (from get_gear)
             activity_id: ID of the activity
         """
+        _validate_uuid(gear_uuid, "gear_uuid")
+        _validate_positive_int(activity_id, "activity_id")
         url = f"{GEAR_LINK_URL}/{gear_uuid}/activity/{activity_id}"
         return await self._put_request(url)
 

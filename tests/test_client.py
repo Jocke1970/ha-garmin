@@ -1169,3 +1169,87 @@ class TestGarminClient:
                 f"/calendar/{start_date.isoformat()}/{end_date.isoformat()}"
             )
             assert called_url.endswith(expected_path_ending)
+
+    # ------------------------------------------------------------------ #
+    #  Security hardening                                                  #
+    # ------------------------------------------------------------------ #
+
+    async def test_ensure_token_fresh_serializes_concurrent_refresh(self):
+        """Only one concurrent caller should perform the actual token refresh."""
+        import asyncio
+
+        auth = _make_auth()
+        client = GarminClient(auth)
+
+        refresh_calls = []
+
+        def fake_refresh() -> None:
+            refresh_calls.append(len(refresh_calls))
+
+        # First two outside-lock checks are True; once inside the lock the
+        # refresh runs and the next inside-lock check is False, so the second
+        # waiter skips the network request.
+        expires_side = [True, True, False]
+
+        with (
+            patch.object(
+                auth, "_token_expires_soon", side_effect=expires_side
+            ) as mock_expires,
+            patch.object(auth, "_refresh_with_lock", side_effect=fake_refresh),
+        ):
+            await asyncio.gather(
+                client._ensure_token_fresh(), client._ensure_token_fresh()
+            )
+
+        # Two outside-lock checks + one re-check under lock = 3 calls.
+        assert mock_expires.call_count == 3
+        # Only the first caller performed the actual refresh.
+        assert len(refresh_calls) == 1
+
+    @pytest.mark.parametrize(
+        "method,args",
+        [
+            ("get_activity", ("abc",)),
+            ("get_activity_details", (-1,)),
+            ("get_activity_hr_in_timezones", (0,)),
+            ("download_activity", (-5, "fit")),
+            ("get_device_solar_data", ("device",)),
+            ("get_device_settings", (0,)),
+        ],
+    )
+    async def test_integer_path_ids_rejected(self, method, args):
+        """Methods that take integer IDs must reject non-positive integers."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+
+        with pytest.raises(ValueError, match="must be a positive integer"):
+            await getattr(client, method)(*args)
+
+    @pytest.mark.parametrize(
+        "method,args",
+        [
+            ("get_gear_stats", ("../../../etc/passwd",)),
+            ("set_active_gear", ("running", "set as default", "not-a-uuid")),
+            ("add_gear_to_activity", ("bad-uuid", 12345)),
+        ],
+    )
+    async def test_uuid_path_ids_rejected(self, method, args):
+        """Methods that take gear UUIDs must reject malformed UUIDs."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+
+        with pytest.raises(ValueError, match="must be a valid UUID"):
+            await getattr(client, method)(*args)
+
+    async def test_uuid_path_accepts_valid_uuid(self):
+        """A well-formed UUID must be accepted for gear UUID path segments."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
+            mock_request.return_value = {"gearStats": {}}
+            await client.get_gear_stats("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11")
+            assert (
+                "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+                in mock_request.call_args[0][1]
+            )
