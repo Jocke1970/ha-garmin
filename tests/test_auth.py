@@ -111,6 +111,28 @@ class TestGarminAuth:
             auth.login("e@x.com", "pw")
         assert auth.di_token == "good"
 
+    def test_login_success_non_mfa_does_not_set_pending(self):
+        """A normal non-MFA login must succeed and leave _mfa_pending False."""
+        from ha_garmin.models import AuthResult
+
+        auth = GarminAuth()
+
+        def working_strategy(_email, _password):
+            auth.di_token = "good"
+            auth.di_refresh_token = "refresh"
+            auth.di_client_id = "CID"
+            return AuthResult(success=True)
+
+        with (
+            patch.object(auth, "_mobile_login_cffi", side_effect=working_strategy),
+            patch.object(auth, "_verify_token", return_value=True),
+        ):
+            result = auth.login("u@x.com", "pw")
+
+        assert result.success is True
+        assert auth._mfa_pending is False
+        assert auth.is_authenticated
+
     async def test_refresh_session_not_authenticated(self):
         """Test refresh_session returns False when not authenticated."""
         auth = GarminAuth()
