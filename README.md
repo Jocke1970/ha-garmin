@@ -158,6 +158,7 @@ The method automatically fetches the correct meal slot ID and time for the day. 
 | `get_fitness_age()` | Fitness age metrics |
 | `get_hydration_data()` | Daily hydration |
 | `get_activities()` | Most recent activities (newest first, no date filter) |
+| `get_activity(activity_id)` | Single activity summary (includes e-bike fields) |
 | `get_activity_details()` | Detailed activity with polyline |
 | `get_activity_hr_in_timezones()` | HR time in zones |
 | `download_activity(activity_id, file_format)` | Download activity file (fit/original/tcx/gpx/kml/csv) |
@@ -168,12 +169,14 @@ The method automatically fetches the correct meal slot ID and time for the day. 
 | `get_endurance_score()` | Endurance score |
 | `get_hill_score()` | Hill score |
 | `get_lactate_threshold()` | Lactate threshold |
+| `get_power_to_weight(target_date)` | FTP / power-to-weight data |
 | `get_goals()` | User goals by status |
 | `get_earned_badges()` | Earned badges |
 | `get_gear()` | User gear items |
 | `get_gear_stats()` | Gear statistics |
 | `get_gear_defaults()` | Default gear settings |
 | `get_devices()` | Connected devices |
+| `get_sensors()` | Paired ANT+/BLE sensors and battery status |
 | `get_device_alarms()` | Device alarms |
 | `get_device_solar_data()` | Solar intensity data per device |
 | `get_device_last_used()` | Last used device and last sync time |
