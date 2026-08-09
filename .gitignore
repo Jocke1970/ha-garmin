@@ -2,6 +2,7 @@
 .claude/
 .garmin_tokens*
 .garmin_data_dump*
+SECURITY_AUDIT_LOG.md
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
