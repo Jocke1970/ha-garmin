@@ -274,13 +274,13 @@ class TestGarminAuth:
         )
 
     def test_widget_bare_signin_title_not_mfa(self) -> None:
-        """The bare signin page title must not be mistaken for an MFA challenge."""
+        """The bare signin page title falls through to portal strategies."""
         auth = GarminAuth()
         sess = self._widget_session("GARMIN Authentication Application")
         with (
             patch("ha_garmin.auth.cffi_requests.Session", return_value=sess),
             patch("time.sleep"),
-            pytest.raises(GarminAPIError, match="unexpected title"),
+            pytest.raises(GarminAPIError, match="auth application page"),
         ):
             auth._widget_web_login("u@x.com", "pw")
 

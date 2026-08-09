@@ -1250,6 +1250,5 @@ class TestGarminClient:
             mock_request.return_value = {"gearStats": {}}
             await client.get_gear_stats("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11")
             assert (
-                "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
-                in mock_request.call_args[0][1]
+                "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" in mock_request.call_args[0][1]
             )

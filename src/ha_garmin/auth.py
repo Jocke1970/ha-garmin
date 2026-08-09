@@ -630,6 +630,12 @@ class GarminAuth:
             raise GarminMFARequired("mfa_required")
 
         if title != "Success":
+            # "GARMIN Authentication Application" without MFA variables is an
+            # intermediate auth page (e.g. login challenge/consent). Fall
+            # through to portal strategies rather than logging an "unexpected
+            # title" warning.
+            if title == "GARMIN Authentication Application":
+                raise GarminAPIError(f"Widget login: auth application page '{title}'")
             raise GarminAPIError(f"Widget login: unexpected title '{title}'")
 
         # Step 4: Extract service ticket

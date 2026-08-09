@@ -76,9 +76,12 @@ def _validate_uuid(value: str, name: str) -> str:
     value = value.strip()
     # Allow standard UUID forms and Garmin's typical 32-char hex UUIDs.
     normalized = value.replace("-", "")
-    if len(normalized) != 32 or not all(c in "0123456789abcdefABCDEF" for c in normalized):
+    if len(normalized) != 32 or not all(
+        c in "0123456789abcdefABCDEF" for c in normalized
+    ):
         raise ValueError(f"{name} must be a valid UUID, got {value!r}")
     return value
+
 
 _LOGGER = logging.getLogger(__name__)
 
