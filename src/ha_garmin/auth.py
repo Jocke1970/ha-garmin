@@ -44,6 +44,17 @@ _LOGGER = logging.getLogger(__name__)
 # Detect ~username expansion that would point into another user's home directory.
 _OTHER_USER_HOME_RE = re.compile(r"^~[^/\\]")
 
+_QUERY_VALUE_RE = re.compile(r"([?&][\w.-]+=)[^&\s)'\"]+")
+
+
+def _sanitize_exception_text(err: Exception) -> str:
+    """Render an exception for logs/messages with URL query values redacted.
+
+    HTTP clients embed the full request URL — query string included — in
+    exception text, so raw exceptions must not reach logs or callers.
+    """
+    return _QUERY_VALUE_RE.sub(r"\1<redacted>", f"{type(err).__name__}: {err}")
+
 
 def token_file_path(path: str | Path) -> Path:
     """Return the token file represented by a directory or JSON path.
@@ -61,9 +72,11 @@ def token_file_path(path: str | Path) -> Path:
             f"Token path must not reference another user's home directory: {path_str!r}"
         )
     token_path = Path(path_str).expanduser()
-    # Reject symlinks on the tokenstore path or its immediate parent
-    # (e.g. ~/.garminconnect -> /attacker/dir).
-    for check_path in (token_path, token_path.parent):
+    # Reject symlinks anywhere in the tokenstore ancestry (e.g.
+    # ~/.garminconnect -> /attacker/dir). O_NOFOLLOW on the final open()
+    # only covers the last component; an intermediate symlinked directory
+    # would still redirect load/save into an attacker-controlled tree.
+    for check_path in (token_path, *token_path.parents):
         try:
             if check_path.is_symlink():
                 raise ValueError(f"Token path must not be a symlink: {path_str!r}")
@@ -272,7 +285,10 @@ class GarminAuth:
                 timeout=15,
             )
         except Exception as e:
-            _LOGGER.debug("Token validation inconclusive (kept): %s", e)
+            _LOGGER.debug(
+                "Token validation inconclusive (kept): %s",
+                _sanitize_exception_text(e),
+            )
             return True
         if r.status_code in (401, 403):
             _LOGGER.warning("Token rejected by API tier: HTTP %s", r.status_code)
@@ -315,6 +331,10 @@ class GarminAuth:
                 "MFA login already in progress; complete it with complete_mfa() "
                 "or call logout() first"
             )
+        # Start every credential login from a clean slate: a stale token from
+        # a previous login/session-load must not leave is_authenticated True
+        # when every strategy fails.
+        self._clear_auth_state()
         # CN SSO does not support the mobile API endpoint, so web-based
         # strategies must run first.  For .com accounts the mobile strategies
         # stay at the front because they bypass Cloudflare more reliably.
@@ -370,12 +390,14 @@ class GarminAuth:
                 # Bad credentials or MFA needed — stop immediately.
                 raise
             except GarminRateLimitError as e:
-                _LOGGER.warning("%s returned 429: %s", name, e)
+                _LOGGER.warning(
+                    "%s returned 429: %s", name, _sanitize_exception_text(e)
+                )
                 rate_limited_count += 1
                 last_err = e
                 continue
             except Exception as e:
-                _LOGGER.warning("%s failed: %s", name, e)
+                _LOGGER.warning("%s failed: %s", name, _sanitize_exception_text(e))
                 last_err = e
                 continue
 
@@ -384,7 +406,10 @@ class GarminAuth:
                 "All login strategies rate limited (429). "
                 "Try again later or check your IP/network."
             )
-        raise GarminAPIError(f"All login strategies exhausted: {last_err}")
+        raise GarminAPIError(
+            "All login strategies exhausted: "
+            + (_sanitize_exception_text(last_err) if last_err else "no strategies ran")
+        )
 
     # ------------------------------------------------------------------ #
     #  STRATEGY 1 — Mobile iOS + curl_cffi (TLS fingerprint rotation)     #
@@ -405,11 +430,15 @@ class GarminAuth:
             except (GarminAuthError, GarminMFARequired):
                 raise
             except GarminRateLimitError as e:
-                _LOGGER.debug("mobile+cffi(%s) 429: %s", imp, e)
+                _LOGGER.debug(
+                    "mobile+cffi(%s) 429: %s", imp, _sanitize_exception_text(e)
+                )
                 last_err = e
                 continue
             except Exception as e:
-                _LOGGER.debug("mobile+cffi(%s) failed: %s", imp, e)
+                _LOGGER.debug(
+                    "mobile+cffi(%s) failed: %s", imp, _sanitize_exception_text(e)
+                )
                 last_err = e
                 continue
 
@@ -499,11 +528,12 @@ class GarminAuth:
             raise GarminRateLimitError("Mobile login: 429 in JSON body")
 
         _LOGGER.warning(
-            "Mobile login: unrecognised response type: %r — full response: %s",
+            "Mobile login: unrecognised response type: %r",
             resp_type,
-            res,
         )
-        raise GarminAPIError(f"Mobile login failed: {res}")
+        raise GarminAPIError(
+            f"Mobile login failed: unrecognised response type {resp_type!r}"
+        )
 
     # ------------------------------------------------------------------ #
     #  STRATEGY 3 — SSO Embed Widget + curl_cffi                         #
@@ -750,11 +780,15 @@ class GarminAuth:
             except (GarminAuthError, GarminMFARequired):
                 raise
             except GarminRateLimitError as e:
-                _LOGGER.debug("portal+cffi(%s) 429: %s", imp, e)
+                _LOGGER.debug(
+                    "portal+cffi(%s) 429: %s", imp, _sanitize_exception_text(e)
+                )
                 last_err = e
                 continue
             except Exception as e:
-                _LOGGER.debug("portal+cffi(%s) failed: %s", imp, e)
+                _LOGGER.debug(
+                    "portal+cffi(%s) failed: %s", imp, _sanitize_exception_text(e)
+                )
                 last_err = e
                 continue
 
@@ -880,11 +914,12 @@ class GarminAuth:
             raise GarminRateLimitError("Portal login: 429 in JSON body")
 
         _LOGGER.warning(
-            "Portal login: unrecognised response type=%r — full response: %s",
+            "Portal login: unrecognised response type=%r",
             resp_type,
-            res,
         )
-        raise GarminAPIError(f"Portal web login failed: {res}")
+        raise GarminAPIError(
+            f"Portal web login failed: unrecognised response type {resp_type!r}"
+        )
 
     # ------------------------------------------------------------------ #
     #  MFA COMPLETION — dual-endpoint fallback                            #
@@ -972,7 +1007,9 @@ class GarminAuth:
                     timeout=30,
                 )
             except Exception as e:
-                failures.append(f"{mfa_url}: connection error {e}")
+                failures.append(
+                    f"{mfa_url}: connection error {_sanitize_exception_text(e)}"
+                )
                 continue
 
             if r.status_code == 429:
@@ -1002,8 +1039,10 @@ class GarminAuth:
                 self._exchange_service_ticket(ticket, service_url=svc_url)
                 return
 
-            # Non-success JSON response — could be auth failure
-            failures.append(f"{mfa_url}: {res}")
+            # Non-success JSON response — could be auth failure. Record only
+            # the error status, never the raw body (may contain PII).
+            status = res.get("error", {}).get("status-code", "unexpected response")
+            failures.append(f"{mfa_url}: {status}")
 
         # All endpoints failed
         if rate_limited_count == len(mfa_endpoints):
@@ -1062,7 +1101,11 @@ class GarminAuth:
                 di_client_id = self._extract_client_id_from_jwt(di_token) or client_id
                 break
             except Exception as e:
-                _LOGGER.debug("DI token parse failed for %s: %s", client_id, e)
+                _LOGGER.debug(
+                    "DI token parse failed for %s: %s",
+                    client_id,
+                    _sanitize_exception_text(e),
+                )
                 continue
 
         if not di_token:
@@ -1113,11 +1156,9 @@ class GarminAuth:
             timeout=30,
         )
         if r.status_code == 429:
-            raise GarminRateLimitError(f"DI token refresh rate limited: {r.text[:200]}")
+            raise GarminRateLimitError("DI token refresh rate limited (429)")
         if not r.ok:
-            raise GarminAuthError(
-                f"DI token refresh failed: {r.status_code} {r.text[:200]}"
-            )
+            raise GarminAuthError(f"DI token refresh failed: HTTP {r.status_code}")
         data = r.json()
         self.di_token = data["access_token"]
         self.di_refresh_token = data.get("refresh_token", self.di_refresh_token)
@@ -1136,7 +1177,7 @@ class GarminAuth:
             await asyncio.to_thread(self._refresh_with_lock)
             return True
         except Exception as err:
-            _LOGGER.debug("DI token refresh failed: %s", err)
+            _LOGGER.debug("DI token refresh failed: %s", _sanitize_exception_text(err))
         return False
 
     def _sync_refresh_if_needed(self) -> None:
@@ -1212,11 +1253,28 @@ class GarminAuth:
         with contextlib.suppress(OSError):
             p.chmod(0o600)
 
+    def logout(self) -> None:
+        """Drop all in-memory auth state and delete the persisted token file.
+
+        Clears DI tokens, MFA state, and the remembered tokenstore path,
+        then removes the on-disk token file (if any) so no usable
+        credentials remain on this instance or in the tokenstore.
+        """
+        self._clear_auth_state()
+        path, self._tokenstore_path = self._tokenstore_path, None
+        if path:
+            try:
+                token_file_path(path).unlink(missing_ok=True)
+            except OSError as e:
+                _LOGGER.warning("Failed to delete token file %s: %s", path, e)
+
     def load_session(self, path: str | Path) -> bool:
         """Load tokens from disk."""
         try:
             p = token_file_path(path)
-        except ValueError:
+        except ValueError as e:
+            # Includes symlink rejection — a potential attack, never silent.
+            _LOGGER.warning("Refusing to load tokens from %s: %s", path, e)
             return False
         if not p.exists():
             return False
@@ -1242,8 +1300,12 @@ class GarminAuth:
                 try:
                     self._refresh_di_token()
                 except Exception as e:
-                    _LOGGER.debug("Proactive refresh failed: %s", e)
+                    _LOGGER.debug(
+                        "Proactive refresh failed: %s", _sanitize_exception_text(e)
+                    )
 
             return True
-        except Exception:
+        except Exception as e:
+            # Never log file contents or token values — type and message only.
+            _LOGGER.warning("Failed to load tokens from %s: %s", p, type(e).__name__)
             return False

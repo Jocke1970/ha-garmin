@@ -402,3 +402,124 @@ class TestGarminAuth:
         auth._mfa_pending = True
         with pytest.raises(GarminAuthError, match="MFA login already in progress"):
             auth.login("u@x.com", "pw")
+
+
+class TestSecurityAuditHardening:
+    """Regression tests for the python-garminconnect audit cross-check."""
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks only")
+    def test_token_path_rejects_symlink_two_levels_up(self, tmp_path):
+        """A symlink planted above the immediate parent must also be rejected."""
+        from ha_garmin.auth import token_file_path
+
+        real = tmp_path / "real"
+        real.mkdir()
+        (tmp_path / "cfg").mkdir()
+        (tmp_path / "cfg" / "store").symlink_to(real)
+
+        target = tmp_path / "cfg" / "store" / "sub" / ".garminconnect"
+        with pytest.raises(ValueError, match="must not be a symlink"):
+            token_file_path(str(target))
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks only")
+    def test_load_session_logs_warning_on_symlink_rejection(self, tmp_path, caplog):
+        """A rejected (e.g. symlinked) tokenstore path is a security event and
+        must be logged, not silently swallowed."""
+        real = tmp_path / "real"
+        real.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(real)
+
+        auth = GarminAuth()
+        with caplog.at_level("WARNING", logger="ha_garmin.auth"):
+            result = auth.load_session(str(link))
+
+        assert result is False
+        assert "Refusing to load tokens" in caplog.text
+
+    def test_load_session_logs_warning_on_corrupt_file(self, tmp_path, caplog):
+        """A corrupt token file must log a warning without token values."""
+        store = tmp_path / "store"
+        store.mkdir()
+        (store / ".garmin_tokens.json").write_text("{not json")
+
+        auth = GarminAuth()
+        with caplog.at_level("WARNING", logger="ha_garmin.auth"):
+            result = auth.load_session(str(store))
+
+        assert result is False
+        assert "Failed to load tokens" in caplog.text
+        assert "{not json" not in caplog.text
+
+    def test_logout_clears_state_and_deletes_token_file(self, tmp_path):
+        auth = GarminAuth()
+        auth.di_token = "tok"
+        auth.di_refresh_token = "refresh"
+        auth.di_client_id = "CID"
+        store = tmp_path / "store"
+        auth._tokenstore_path = str(store)
+        store.mkdir()
+        token_file = store / ".garmin_tokens.json"
+        token_file.write_text("{}")
+
+        auth.logout()
+
+        assert auth.di_token is None
+        assert auth.di_refresh_token is None
+        assert auth.di_client_id is None
+        assert auth._tokenstore_path is None
+        assert not token_file.exists()
+
+    def test_login_clears_stale_auth_state_on_entry(self):
+        """A failed re-login must not leave is_authenticated True with old
+        tokens."""
+        auth = GarminAuth()
+        auth.di_token = "stale-token"
+
+        def fail(_email, _password):
+            raise GarminAPIError("boom")
+
+        with (
+            patch.object(auth, "_mobile_login_cffi", side_effect=fail),
+            patch.object(auth, "_mobile_login_requests", side_effect=fail),
+            patch.object(auth, "_widget_web_login", side_effect=fail),
+            patch.object(auth, "_portal_web_login_cffi", side_effect=fail),
+            patch.object(auth, "_portal_web_login_requests", side_effect=fail),
+            pytest.raises(GarminAPIError, match="exhausted"),
+        ):
+            auth.login("u@x.com", "pw")
+
+        assert auth.di_token is None
+        assert not auth.is_authenticated
+
+    def test_login_failure_redacts_url_query_values(self, caplog):
+        """requests embeds full URLs in exception text; query-string values
+        must not reach the log or the raised error."""
+        auth = GarminAuth()
+        boom = Exception(
+            "Max retries exceeded with url: /x?ticket=ST-CANARY-123 (Caused by ...)"
+        )
+
+        with (
+            patch.object(auth, "_mobile_login_cffi", side_effect=boom),
+            patch.object(auth, "_mobile_login_requests", side_effect=boom),
+            patch.object(auth, "_widget_web_login", side_effect=boom),
+            patch.object(auth, "_portal_web_login_cffi", side_effect=boom),
+            patch.object(auth, "_portal_web_login_requests", side_effect=boom),
+            caplog.at_level("WARNING", logger="ha_garmin.auth"),
+            pytest.raises(GarminAPIError, match="exhausted") as exc_info,
+        ):
+            auth.login("u@x.com", "pw")
+
+        assert "ST-CANARY-123" not in caplog.text
+        assert "ST-CANARY-123" not in str(exc_info.value)
+        assert "ticket=<redacted>" in caplog.text
+
+    def test_sanitize_exception_text_redacts_query_values(self):
+        from ha_garmin.auth import _sanitize_exception_text
+
+        out = _sanitize_exception_text(Exception("url: /x?ticket=ST-1&foo=bar ok"))
+        assert "ST-1" not in out
+        assert "bar" not in out
+        assert "ticket=<redacted>" in out
+        assert "foo=<redacted>" in out

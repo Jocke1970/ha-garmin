@@ -1252,3 +1252,74 @@ class TestGarminClient:
             assert (
                 "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" in mock_request.call_args[0][1]
             )
+
+
+class TestSecurityAuditHardening:
+    """Regression tests for the python-garminconnect audit cross-check."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://connectapi.garmin.com/a/../../secret",
+            "https://connectapi.garmin.com/a/%2e%2e/%2e%2e/secret",
+            "https://connectapi.garmin.com/a/%2E%2E/secret",
+            "/gear-service/gear/../admin",
+        ],
+    )
+    def test_assert_safe_url_rejects_traversal(self, url):
+        from ha_garmin.client import _assert_safe_url
+
+        with pytest.raises(ValueError, match="Invalid API URL"):
+            _assert_safe_url(url)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://connectapi.garmin.com/userprofile-service/socialProfile",
+            # dots inside a segment are not traversal
+            "https://connectapi.garmin.com/a/first..last",
+        ],
+    )
+    def test_assert_safe_url_accepts_legitimate(self, url):
+        from ha_garmin.client import _assert_safe_url
+
+        _assert_safe_url(url)
+
+    async def test_get_gear_defaults_validates_profile_id(self):
+        auth = _make_auth()
+        client = GarminClient(auth)
+        with pytest.raises(ValueError, match="user_profile_id"):
+            await client.get_gear_defaults("1/../../admin")
+
+    async def test_set_active_gear_rejects_unknown_activity_type(self):
+        auth = _make_auth()
+        client = GarminClient(auth)
+        with pytest.raises(ValueError, match="Unknown activity_type"):
+            await client.set_active_gear("running/../../x", "set as default", "9" * 32)
+
+    async def test_user_summary_quotes_display_name(self):
+        """A server-supplied display name must not alter the request path."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+        profile = MagicMock()
+        profile.display_name = "user/../admin"
+        captured = {}
+
+        async def fake_request(method, url, params=None):
+            captured["url"] = url
+            return {}
+
+        with (
+            patch.object(client, "get_user_profile", return_value=profile),
+            patch.object(client, "_request", side_effect=fake_request),
+        ):
+            await client._get_user_summary_raw(date(2026, 1, 1))
+
+        assert "user/../admin" not in captured["url"]
+        assert "user%2F..%2Fadmin" in captured["url"]
+
+    def test_sanitize_filename_strips_header_breakout_chars(self):
+        from ha_garmin.client import _sanitize_filename
+
+        assert _sanitize_filename('a"\r\nb\\c.fit') == "a___b_c.fit"
+        assert _sanitize_filename("normal.fit") == "normal.fit"

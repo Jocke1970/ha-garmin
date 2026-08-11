@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote, unquote, urlsplit
 
 from .const import (
     ACTIVITIES_URL,
@@ -81,6 +83,24 @@ def _validate_uuid(value: str, name: str) -> str:
     ):
         raise ValueError(f"{name} must be a valid UUID, got {value!r}")
     return value
+
+
+def _assert_safe_url(url: str) -> None:
+    """Reject path traversal in a request URL (defense-in-depth).
+
+    requests percent-decodes unreserved characters (e.g. %2e -> .) after
+    validation, so check the decoded form. Segment-wise: only a full ".."
+    segment is traversal; names containing dots (e.g. "first..last") stay
+    valid.
+    """
+    decoded_path = unquote(urlsplit(url).path)
+    if any(segment == ".." for segment in decoded_path.split("/")):
+        raise ValueError(f"Invalid API URL: {url!r}")
+
+
+def _sanitize_filename(name: str) -> str:
+    """Strip characters that could break out of a multipart header value."""
+    return re.sub(r'[\r\n"\\]', "_", name)
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -730,6 +750,7 @@ class GarminClient:
         await self._ensure_token_fresh()
 
         # Apply CN domain + DI token URL routing
+        _assert_safe_url(url)
         url = self._get_url(url)
         headers = self._auth.get_api_headers()
 
@@ -807,10 +828,9 @@ class GarminClient:
 
             elif response.status_code != 200:
                 _LOGGER.debug(
-                    "API %s returned %d: %s",
+                    "API %s returned %d",
                     url,
                     response.status_code,
-                    response.text[:200],
                 )
                 raise GarminAPIError(
                     f"Request to {url} failed: {response.status_code}",
@@ -841,6 +861,7 @@ class GarminClient:
         # Proactively refresh if token is expiring soon
         await self._ensure_token_fresh()
 
+        _assert_safe_url(url)
         full_url = self._get_url(url)
 
         def _headers() -> dict[str, str]:
@@ -1334,6 +1355,7 @@ class GarminClient:
 
     async def get_gear_defaults(self, user_profile_id: int) -> list[dict[str, Any]]:
         """Get default gear settings."""
+        _validate_positive_int(user_profile_id, "user_profile_id")
         url = f"{GEAR_DEFAULTS_URL}/{user_profile_id}/activityTypes"
         data = await self._request("GET", url)
         return data if isinstance(data, list) else []
@@ -1406,7 +1428,9 @@ class GarminClient:
             target_date = date.today()
 
         profile = await self.get_user_profile()
-        url = f"{USER_SUMMARY_URL}/{profile.display_name}"
+        # display_name comes from the server; quote it so a hostile response
+        # cannot alter the request path.
+        url = f"{USER_SUMMARY_URL}/{quote(profile.display_name, safe='')}"
         params = {"calendarDate": target_date.isoformat()}
         data = await self._request("GET", url, params=params)
         return data if isinstance(data, dict) else {}
@@ -1515,6 +1539,7 @@ class GarminClient:
         headers.update(DEFAULT_HEADERS)
         headers["Content-Type"] = "application/json"
 
+        _assert_safe_url(url)
         full_url = self._get_url(url)
         _LOGGER.debug("POST %s with payload: %s", full_url, json_data)
 
@@ -1536,10 +1561,8 @@ class GarminClient:
             response = await asyncio.to_thread(_do_post, headers)
 
         if response.status_code not in (200, 201, 204):
-            _LOGGER.error("POST failed %s: %s", response.status_code, response.text)
-            raise GarminAPIError(
-                f"POST failed: {response.status_code} - {response.text}"
-            )
+            _LOGGER.error("POST failed %s", response.status_code)
+            raise GarminAPIError(f"POST failed: {response.status_code}")
 
         if response.status_code == 204:
             return {}
@@ -1564,6 +1587,7 @@ class GarminClient:
         if json_data is not None:
             headers["Content-Type"] = "application/json"
 
+        _assert_safe_url(url)
         full_url = self._get_url(url)
         _LOGGER.debug("PUT %s", full_url)
 
@@ -1586,9 +1610,7 @@ class GarminClient:
             response = await asyncio.to_thread(_do_put, headers)
 
         if response.status_code not in (200, 201, 204):
-            raise GarminAPIError(
-                f"PUT failed: {response.status_code} - {response.text}"
-            )
+            raise GarminAPIError(f"PUT failed: {response.status_code}")
 
         if response.status_code == 204:
             return {}
@@ -1602,6 +1624,7 @@ class GarminClient:
         headers = self._auth.get_api_headers()
         headers.update(DEFAULT_HEADERS)
 
+        _assert_safe_url(url)
         full_url = self._get_url(url)
         _LOGGER.debug("DELETE %s", full_url)
 
@@ -1647,7 +1670,13 @@ class GarminClient:
         _LOGGER.debug("Uploading FIT file: %s (%d bytes)", filename, len(fit_data))
 
         def _do_upload(hdrs: dict[str, str]) -> Any:
-            files = {"file": (filename, fit_data, "application/octet-stream")}
+            files = {
+                "file": (
+                    _sanitize_filename(filename),
+                    fit_data,
+                    "application/octet-stream",
+                )
+            }
             return stdlib_requests.post(full_url, headers=hdrs, files=files, timeout=60)
 
         response = await asyncio.to_thread(_do_upload, headers)
@@ -1658,14 +1687,10 @@ class GarminClient:
             headers.update(DEFAULT_HEADERS)
             response = await asyncio.to_thread(_do_upload, headers)
             if response.status_code not in (200, 201):
-                raise GarminAPIError(
-                    f"FIT upload failed: {response.status_code} - {response.text}"
-                )
+                raise GarminAPIError(f"FIT upload failed: {response.status_code}")
 
         if response.status_code not in (200, 201):
-            raise GarminAPIError(
-                f"FIT upload failed: {response.status_code} - {response.text}"
-            )
+            raise GarminAPIError(f"FIT upload failed: {response.status_code}")
 
         return response.json()
 
@@ -1994,7 +2019,14 @@ class GarminClient:
             "swimming": 5,
             "other": 9,
         }
-        activity_type_id = activity_type_map.get(activity_type.lower(), activity_type)
+        activity_type_id = activity_type_map.get(activity_type.lower())
+        if activity_type_id is None:
+            # Never fall through with the raw string: it would be spliced
+            # unvalidated into a state-changing PUT/DELETE URL.
+            raise ValueError(
+                f"Unknown activity_type: {activity_type!r} "
+                f"(expected one of {sorted(activity_type_map)})"
+            )
 
         url_path = f"/gear-service/gear/{gear_uuid}/activityType/{activity_type_id}"
 
@@ -2129,7 +2161,7 @@ class GarminClient:
         _LOGGER.debug("Uploading activity file: %s", path.name)
 
         def _do_upload(hdrs: dict[str, str]) -> Any:
-            files = {"file": (path.name, file_bytes, content_type)}
+            files = {"file": (_sanitize_filename(path.name), file_bytes, content_type)}
             return stdlib_requests.post(full_url, headers=hdrs, files=files, timeout=60)
 
         response = await asyncio.to_thread(_do_upload, headers)
@@ -2141,9 +2173,7 @@ class GarminClient:
             headers["User-Agent"] = "GCM-iOS-5.7.2.1"
             response = await asyncio.to_thread(_do_upload, headers)
             if response.status_code not in (200, 201, 400):
-                raise GarminAPIError(
-                    f"Upload failed: {response.status_code}, body: {response.text[:500]}"
-                )
+                raise GarminAPIError(f"Upload failed: {response.status_code}")
             try:
                 return response.json()
             except Exception:
@@ -2153,7 +2183,7 @@ class GarminClient:
             body = response.json()
         except Exception:
             raise GarminAPIError(
-                f"Upload failed: {response.status_code}, body: {response.text[:500]}"
+                f"Upload failed: {response.status_code} (non-JSON response)"
             ) from None
 
         # 400 with uploadId means file was accepted but has validation issues
@@ -2173,7 +2203,7 @@ class GarminClient:
                         messages.append(msg.get("content", "Unknown error"))
                 error_msg = "; ".join(messages) if messages else "Unknown error"
                 raise GarminAPIError(f"Upload failed: {error_msg}")
-            raise GarminAPIError(f"Upload failed: {response.status_code}, body: {body}")
+            raise GarminAPIError(f"Upload failed: {response.status_code}")
         return body
 
     async def add_gear_to_activity(
