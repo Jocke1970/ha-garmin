@@ -1,5 +1,6 @@
 """Tests for GarminClient."""
 
+import re
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -936,6 +937,98 @@ class TestGarminClient:
         assert entry["carbs"] == ""
         assert entry["protein"] == ""
         assert entry["fat"] == ""
+
+    async def test_set_hydration_normalizes_timestamp_without_milliseconds(self):
+        """A timestamp with no milliseconds must still be accepted and padded to .000."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+
+        put_payloads = []
+
+        async def fake_put(url, payload):
+            put_payloads.append((url, payload))
+            return {}
+
+        client._put_request = fake_put
+
+        await client.set_hydration(500, timestamp="2024-01-15T08:30:00")
+
+        payload = put_payloads[0][1]
+        assert payload["timestampLocal"] == "2024-01-15T08:30:00.000"
+
+    async def test_set_hydration_preserves_provided_milliseconds(self):
+        """A timestamp that already has sub-second precision keeps millisecond precision."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+
+        put_payloads = []
+
+        async def fake_put(url, payload):
+            put_payloads.append((url, payload))
+            return {}
+
+        client._put_request = fake_put
+
+        await client.set_hydration(500, timestamp="2024-01-15T08:30:00.123456")
+
+        payload = put_payloads[0][1]
+        assert payload["timestampLocal"] == "2024-01-15T08:30:00.123"
+
+    async def test_set_hydration_defaults_timestamp_to_now(self):
+        """Omitting the timestamp still produces a millisecond-precision value."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+
+        put_payloads = []
+
+        async def fake_put(url, payload):
+            put_payloads.append((url, payload))
+            return {}
+
+        client._put_request = fake_put
+
+        await client.set_hydration(500)
+
+        payload = put_payloads[0][1]
+        assert re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}", payload["timestampLocal"]
+        )
+
+    async def test_set_hydration_builds_correct_payload(self):
+        """set_hydration sends a PUT with calendarDate/timestampLocal/valueInML."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+
+        put_payloads = []
+
+        async def fake_put(url, payload):
+            put_payloads.append((url, payload))
+            return {"success": True}
+
+        client._put_request = fake_put
+
+        result = await client.set_hydration(
+            750, cdate="2026-04-18", timestamp="2026-04-18T20:21:52"
+        )
+
+        assert result == {"success": True}
+        assert len(put_payloads) == 1
+        url, payload = put_payloads[0]
+        assert "hydration" in url.lower()
+        assert payload["calendarDate"] == "2026-04-18"
+        assert payload["timestampLocal"] == "2026-04-18T20:21:52.000"
+        assert payload["valueInML"] == 750
+
+    async def test_set_hydration_rejects_value_over_limit(self):
+        """Values beyond +/-10000 mL must raise ValueError before any request is made."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+        client._put_request = AsyncMock()
+
+        with pytest.raises(ValueError, match="10000"):
+            await client.set_hydration(10001)
+
+        client._put_request.assert_not_called()
 
     async def test_get_nutrition_log_returns_dict(self):
         """Test get_nutrition_log returns dict from API response."""
