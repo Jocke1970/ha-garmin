@@ -544,9 +544,17 @@ def _add_computed_fields(data: dict[str, Any]) -> dict[str, Any]:
         latest_status_data = (
             training_status.get("mostRecentTrainingStatus") or {}
         ).get("latestTrainingStatusData") or {}
-        if latest_status_data:
+        # Keyed by device id, and a device with nothing to report comes back
+        # as null rather than being omitted. Selecting over the raw values
+        # then fails on `.get`, which takes down the whole training fetch --
+        # readiness, lactate threshold, endurance, HRV and power-to-weight
+        # along with the status.
+        device_entries = [
+            entry for entry in latest_status_data.values() if isinstance(entry, dict)
+        ]
+        if device_entries:
             most_recent = max(
-                latest_status_data.values(),
+                device_entries,
                 key=lambda x: x.get("calendarDate") or "",
             )
             status_code = most_recent.get("trainingStatus")
