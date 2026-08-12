@@ -82,3 +82,42 @@ def test_an_unknown_code_is_not_a_crash() -> None:
     )
 
     assert result["trainingStatusPhrase"] is None
+
+
+def test_a_status_code_that_cannot_be_a_key() -> None:
+    """`dict.get` raises on an unhashable key, so the type check earns its place."""
+    result = _add_computed_fields(
+        _payload({"dev1": {"calendarDate": "2026-08-11", "trainingStatus": []}})
+    )
+
+    assert result["trainingStatusPhrase"] is None
+
+
+async def test_the_whole_training_fetch_survives_a_quiet_device() -> None:
+    """The point of the fix: the crash took eight other metrics with it."""
+    from ha_garmin import GarminAuth, GarminClient
+
+    auth = GarminAuth()
+    auth.di_token = "token"
+    client = GarminClient(auth)
+
+    status = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                "watch_a": {"calendarDate": "2026-08-10", "trainingStatus": 8},
+                "watch_b": None,
+                "watch_c": {"calendarDate": "2026-08-12", "trainingStatus": 7},
+            }
+        },
+        "mostRecentVO2Max": {"generic": {"vo2MaxValue": 48}},
+    }
+
+    async def _only_status(func, *args, **kwargs):
+        return status if func.__name__ == "get_training_status" else {}
+
+    client._safe_call = _only_status  # type: ignore[method-assign]
+
+    result = await client.fetch_training_data()
+
+    assert result["trainingStatusPhrase"] == "Productive"
+    assert result["vo2MaxValue"] == 48
