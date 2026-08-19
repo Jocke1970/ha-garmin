@@ -17,6 +17,7 @@ import logging
 import os
 import random
 import re
+import secrets
 import threading
 import time
 from pathlib import Path
@@ -1240,18 +1241,30 @@ class GarminAuth:
         p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with contextlib.suppress(OSError):
             p.parent.chmod(0o700)
-        # os.open with mode 0o600 (and O_NOFOLLOW where available, so a
-        # pre-planted symlink can't redirect the write) instead of write_text,
-        # which would create the file under the umask first.
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        fd = os.open(p, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as token_file:
-            token_file.write(json.dumps(data, indent=2))
-        # Enforce 0o600 even if the file pre-existed with looser permissions.
-        with contextlib.suppress(OSError):
-            p.chmod(0o600)
+        # Write to an unpredictable sibling temp file with O_CREAT|O_EXCL
+        # (mode 0o600, and O_NOFOLLOW where available), then atomically
+        # replace the target. A fixed sibling name would be guessable, and
+        # without O_EXCL a pre-planted file's inode would be reused for the
+        # write instead of a fresh one being created, letting whoever holds
+        # a descriptor on that pre-planted inode observe the token payload
+        # as it's written. Writing straight to the target with O_TRUNC has
+        # the same problem, plus it isn't atomic against a concurrent reader.
+        tmp = p.with_name(f".{p.name}.{secrets.token_hex(8)}.tmp")
+        try:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(tmp, flags, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as token_file:
+                token_file.write(json.dumps(data, indent=2))
+            # Enforce 0o600 even if the file pre-existed with looser permissions.
+            with contextlib.suppress(OSError):
+                tmp.chmod(0o600)
+            tmp.replace(p)
+        except Exception:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+            raise
 
     def logout(self) -> None:
         """Drop all in-memory auth state and delete the persisted token file.
