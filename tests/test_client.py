@@ -80,6 +80,7 @@ class TestGarminClient:
         old_activity = {
             "activityId": 42,
             "activityName": "Winter Run",
+            "deviceId": 3511528293,
             "activityType": {"typeKey": "running"},
             "startTimeGMT": "2024-01-01T07:00:00",
             "hasPolyline": False,
@@ -101,7 +102,9 @@ class TestGarminClient:
 
         mock_acts.assert_awaited_once_with(0, 10)
         assert data["lastActivity"]["activityId"] == 42
+        assert data["lastActivity"]["deviceId"] == 3511528293
         assert len(data["lastActivities"]) == 1
+        assert data["lastActivities"][0]["deviceId"] == 3511528293
 
     async def test_fetch_activity_data_merges_ebike_fields(self):
         """Test fetch_activity_data merges e-bike fields from the summary endpoint (#527)."""

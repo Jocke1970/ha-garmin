@@ -111,6 +111,7 @@ ACTIVITY_ESSENTIAL_KEYS = {
     # Identity
     "activityId",
     "activityName",
+    "deviceId",
     # Time
     "startTimeLocal",
     "startTimeGMT",
