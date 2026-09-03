@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal
 
+from .const import GARMIN_FITNESS_ALGORITHM_VERSION
 from .load import (
     analyze_garmin_load_coverage,
     build_daily_garmin_load_series,
@@ -37,6 +38,7 @@ class TrainingHistoryResult:
     """Derived training metrics for one homogeneous load source."""
 
     source: LoadSource
+    algorithm_version: int
     assessment: LoadSeriesAssessment
     daily_loads: tuple[DailyLoad, ...]
     training_points: tuple[TrainingLoadPoint, ...]
@@ -84,6 +86,7 @@ def build_training_history_from_daily_loads(
     if not assessment.ready:
         return TrainingHistoryResult(
             source=source,
+            algorithm_version=GARMIN_FITNESS_ALGORITHM_VERSION,
             assessment=assessment,
             daily_loads=days,
             training_points=(),
@@ -94,6 +97,7 @@ def build_training_history_from_daily_loads(
     training_points = tuple(compute_ctl_atl_tsb(days))
     return TrainingHistoryResult(
         source=source,
+        algorithm_version=GARMIN_FITNESS_ALGORITHM_VERSION,
         assessment=assessment,
         daily_loads=days,
         training_points=training_points,
