@@ -47,3 +47,14 @@ class GarminLoadCoverage:
     activities_with_load: int
     activities_without_load: int
     coverage_percent: float
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingLoadPoint:
+    """Daily point in the CTL/ATL/TSB performance-management series."""
+
+    date: date
+    daily_load: float
+    ctl: float
+    atl: float
+    tsb: float
