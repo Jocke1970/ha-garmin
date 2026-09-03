@@ -2,32 +2,33 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, feature/garmin-fitness]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      
+
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-      
+
       - name: Check formatting
         run: ruff format --check src tests
-      
+
       - name: Lint with ruff
         run: ruff check src tests
-      
+
       - name: Type check with mypy
         run: mypy src
 
@@ -36,23 +37,23 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
-    
+
     steps:
       - uses: actions/checkout@v7
-      
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-      
+
       - name: Run tests with coverage
         run: pytest tests/ -v --cov=ha_garmin --cov-report=xml
-      
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
         with:
@@ -64,18 +65,18 @@ jobs:
     needs: [lint, test]
     steps:
       - uses: actions/checkout@v7
-      
+
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      
+
       - name: Install build tools
         run: pip install build
-      
+
       - name: Build package
         run: python -m build
-      
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
