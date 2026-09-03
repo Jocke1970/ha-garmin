@@ -3,7 +3,11 @@ from datetime import UTC, date, datetime
 import pytest
 
 from ha_garmin.fitness.models import ActivityMetrics
-from ha_garmin.fitness.trimp import build_daily_trimp_series, compute_trimp
+from ha_garmin.fitness.trimp import (
+    analyze_trimp_input_coverage,
+    build_daily_trimp_series,
+    compute_trimp,
+)
 
 
 def _activity(
@@ -26,6 +30,24 @@ def _activity(
         avg_power=None,
         normalized_power=None,
     )
+
+
+def test_trimp_input_coverage_reports_missing_fields():
+    coverage = analyze_trimp_input_coverage(
+        [
+            _activity(1, avg_hr=120, minutes=30),
+            _activity(2, avg_hr=None, minutes=30),
+            _activity(3, avg_hr=120, minutes=0),
+            _activity(4, avg_hr=None, minutes=0),
+        ]
+    )
+
+    assert coverage.total_activities == 4
+    assert coverage.eligible_activities == 1
+    assert coverage.ineligible_activities == 3
+    assert coverage.missing_average_hr == 2
+    assert coverage.missing_duration == 2
+    assert coverage.coverage_percent == 25.0
 
 
 def test_compute_trimp_known_value():
