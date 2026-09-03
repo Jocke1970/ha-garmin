@@ -1,5 +1,11 @@
 """Garmin Fitness normalization and calculation primitives."""
 
+from .const import GARMIN_FITNESS_ALGORITHM_VERSION
+from .diagnostics import (
+    ActivityTypeCoverage,
+    LoadSourceCoverageComparison,
+    compare_load_source_coverage,
+)
 from .export import TrainingHistoryExportRow, export_training_history_rows
 from .focus import (
     LoadFocus,
@@ -40,12 +46,15 @@ from .trimp import (
 __all__ = [
     "AcwrPoint",
     "ActivityMetrics",
+    "ActivityTypeCoverage",
     "DailyLoad",
+    "GARMIN_FITNESS_ALGORITHM_VERSION",
     "GarminLoadCoverage",
     "GarminTrainingHistory",
     "LoadFocus",
     "LoadFocusSummary",
     "LoadSeriesAssessment",
+    "LoadSourceCoverageComparison",
     "RampRatePoint",
     "TrainingHistoryExportRow",
     "TrainingHistoryResult",
@@ -62,6 +71,7 @@ __all__ = [
     "calibrate_personal_trimp_max",
     "classify_activity_focus",
     "classify_load_focus",
+    "compare_load_source_coverage",
     "compute_acwr",
     "compute_ctl_atl_tsb",
     "compute_ramp_rate",
