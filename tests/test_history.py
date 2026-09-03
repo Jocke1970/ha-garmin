@@ -1,12 +1,17 @@
 """Tests for strict Garmin history access."""
 
 from datetime import date
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from ha_garmin import GarminAuth, GarminClient, GarminHistoryClient
-from ha_garmin.const import ACTIVITIES_URL
+from ha_garmin.const import (
+    ACTIVITIES_URL,
+    RESTING_HEART_RATE_METRIC_ID,
+    USER_STATS_DAILY_URL,
+)
 from ha_garmin.exceptions import GarminAPIError
 
 
@@ -36,6 +41,75 @@ class TestGarminHistoryClient:
         mock_summary.assert_awaited_once_with(target)
         assert summary["calendarDate"] == "2026-09-01"
         assert summary["restingHeartRate"] == 58
+
+    async def test_get_resting_heart_rate_range_uses_one_strict_range_request(self):
+        client = _make_client()
+        history = GarminHistoryClient(client)
+        payload = {
+            "allMetrics": {
+                "metricsMap": {
+                    "WELLNESS_RESTING_HEART_RATE": [
+                        {"calendarDate": "2026-08-01", "value": 58},
+                        {"calendarDate": "2026-08-02", "value": 57.5},
+                        {"calendarDate": "2026-08-03", "value": 0},
+                        {"calendarDate": "not-a-date", "value": 60},
+                        {"calendarDate": "2026-07-31", "value": 61},
+                    ]
+                }
+            }
+        }
+
+        with (
+            patch.object(
+                client, "get_user_profile", new_callable=AsyncMock
+            ) as mock_profile,
+            patch.object(client, "_request", new_callable=AsyncMock) as mock_req,
+        ):
+            mock_profile.return_value = SimpleNamespace(display_name="test/user")
+            mock_req.return_value = payload
+            result = await history.get_resting_heart_rate_range(
+                date(2026, 8, 1), date(2026, 8, 3)
+            )
+
+        assert result == {
+            date(2026, 8, 1): 58.0,
+            date(2026, 8, 2): 57.5,
+        }
+        assert mock_req.await_count == 1
+        assert mock_req.await_args.args[:2] == (
+            "GET",
+            f"{USER_STATS_DAILY_URL}/test%2Fuser",
+        )
+        assert mock_req.await_args.kwargs["params"] == {
+            "fromDate": "2026-08-01",
+            "untilDate": "2026-08-03",
+            "metricId": RESTING_HEART_RATE_METRIC_ID,
+        }
+
+    async def test_get_resting_heart_rate_range_handles_missing_metric(self):
+        client = _make_client()
+        history = GarminHistoryClient(client)
+
+        with (
+            patch.object(
+                client, "get_user_profile", new_callable=AsyncMock
+            ) as mock_profile,
+            patch.object(client, "_request", new_callable=AsyncMock) as mock_req,
+        ):
+            mock_profile.return_value = SimpleNamespace(display_name="test")
+            mock_req.return_value = {"allMetrics": {"metricsMap": {}}}
+            result = await history.get_resting_heart_rate_range(date(2026, 8, 1))
+
+        assert result == {}
+
+    async def test_get_resting_heart_rate_range_rejects_reverse_range(self):
+        client = _make_client()
+        history = GarminHistoryClient(client)
+
+        with pytest.raises(ValueError, match="start_date cannot be after end_date"):
+            await history.get_resting_heart_rate_range(
+                date(2026, 9, 2), date(2026, 9, 1)
+            )
 
     async def test_get_activities_by_date_single_day(self):
         client = _make_client()
