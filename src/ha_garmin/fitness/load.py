@@ -140,7 +140,9 @@ def normalize_activities(
     for raw in activities:
         normalized = normalize_activity(raw)
         existing = by_id.get(normalized.activity_id)
-        if existing is None or _activity_quality(normalized) > _activity_quality(existing):
+        if existing is None or _activity_quality(normalized) > _activity_quality(
+            existing
+        ):
             by_id[normalized.activity_id] = normalized
     return sorted(
         by_id.values(),
