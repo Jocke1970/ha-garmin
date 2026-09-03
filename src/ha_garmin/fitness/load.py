@@ -77,11 +77,11 @@ def _calendar_date(activity: dict[str, Any], start_time: datetime) -> date:
 def normalize_activity(activity: dict[str, Any]) -> ActivityMetrics:
     """Normalize one Garmin activity into calculation-friendly fields."""
     activity_id = activity.get("activityId")
-    if isinstance(activity_id, bool):
-        raise ValueError("Activity has an invalid activityId")
+    if isinstance(activity_id, bool) or not isinstance(activity_id, (int, str)):
+        raise ValueError("Activity is missing a valid activityId")
     try:
         activity_id = int(activity_id)
-    except (TypeError, ValueError) as err:
+    except ValueError as err:
         raise ValueError("Activity is missing a valid activityId") from err
     if activity_id <= 0:
         raise ValueError("Activity has an invalid activityId")
