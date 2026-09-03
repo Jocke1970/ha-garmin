@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
+from .const import LOAD_FOCUS_DOMINANCE_RATIO
 from .models import ActivityMetrics
 
 LoadFocus = Literal["aerobic", "anaerobic", "mixed", "unknown"]
@@ -47,7 +48,7 @@ def _focus_from_effects(
 
 def classify_activity_focus(
     activity: ActivityMetrics,
-    dominance_ratio: float = 1.5,
+    dominance_ratio: float = LOAD_FOCUS_DOMINANCE_RATIO,
 ) -> LoadFocus:
     """Classify one activity from Garmin aerobic/anaerobic Training Effect."""
     return _focus_from_effects(
@@ -59,7 +60,7 @@ def classify_activity_focus(
 
 def classify_load_focus(
     activities: Iterable[ActivityMetrics],
-    dominance_ratio: float = 1.5,
+    dominance_ratio: float = LOAD_FOCUS_DOMINANCE_RATIO,
 ) -> LoadFocusSummary:
     """Classify recent training focus from average Garmin Training Effect.
 
