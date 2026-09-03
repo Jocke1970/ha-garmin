@@ -90,9 +90,9 @@ def classify_load_focus(
             dominant_focus="unknown",
         )
 
-    average_aerobic = sum(pair[0] for pair in effect_pairs if pair[0] is not None) / len(
-        effect_pairs
-    )
+    average_aerobic = sum(
+        pair[0] for pair in effect_pairs if pair[0] is not None
+    ) / len(effect_pairs)
     average_anaerobic = sum(
         pair[1] for pair in effect_pairs if pair[1] is not None
     ) / len(effect_pairs)
