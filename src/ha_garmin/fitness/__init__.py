@@ -30,7 +30,12 @@ from .strain import (
     count_consecutive_hard_days,
 )
 from .training import compute_ctl_atl_tsb
-from .trimp import build_daily_trimp_series, compute_trimp
+from .trimp import (
+    TrimpInputCoverage,
+    analyze_trimp_input_coverage,
+    build_daily_trimp_series,
+    compute_trimp,
+)
 
 __all__ = [
     "AcwrPoint",
@@ -45,7 +50,9 @@ __all__ = [
     "TrainingHistoryExportRow",
     "TrainingHistoryResult",
     "TrainingLoadPoint",
+    "TrimpInputCoverage",
     "analyze_garmin_load_coverage",
+    "analyze_trimp_input_coverage",
     "assess_daily_load_series",
     "build_daily_garmin_load_series",
     "build_daily_trimp_series",
