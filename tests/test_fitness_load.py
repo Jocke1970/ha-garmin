@@ -61,6 +61,31 @@ def test_normalize_activities_deduplicates_activity_id():
     assert normalized[1].duration_minutes == 10.0
 
 
+def test_normalize_activities_prefers_richer_duplicate():
+    raw = [
+        {
+            "activityId": 7,
+            "startTimeGMT": "2026-09-02T10:00:00",
+            "duration": 1800,
+        },
+        {
+            "activityId": 7,
+            "startTimeGMT": "2026-09-02T10:00:00",
+            "duration": 1800,
+            "averageHR": 112,
+            "activityTrainingLoad": 6.5,
+            "aerobicTrainingEffect": 1.4,
+            "anaerobicTrainingEffect": 0.0,
+        },
+    ]
+
+    activity = normalize_activities(raw)[0]
+
+    assert activity.avg_hr == 112.0
+    assert activity.garmin_training_load == 6.5
+    assert activity.aerobic_training_effect == 1.4
+
+
 def test_load_coverage_distinguishes_missing_from_zero():
     activities = normalize_activities(
         [
