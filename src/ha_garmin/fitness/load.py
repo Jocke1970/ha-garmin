@@ -51,6 +51,29 @@ def _activity_type(activity: dict[str, Any]) -> str:
     return str(raw or "unknown")
 
 
+def _calendar_date(activity: dict[str, Any], start_time: datetime) -> date:
+    """Return the activity's local Garmin calendar date when available."""
+    raw_calendar_date = activity.get("calendarDate")
+    if isinstance(raw_calendar_date, date) and not isinstance(
+        raw_calendar_date, datetime
+    ):
+        return raw_calendar_date
+    if isinstance(raw_calendar_date, str):
+        try:
+            return date.fromisoformat(raw_calendar_date)
+        except ValueError:
+            pass
+
+    raw_local = activity.get("startTimeLocal")
+    if isinstance(raw_local, str) and raw_local:
+        try:
+            return datetime.fromisoformat(raw_local.replace("Z", "+00:00")).date()
+        except ValueError:
+            pass
+
+    return start_time.date()
+
+
 def normalize_activity(activity: dict[str, Any]) -> ActivityMetrics:
     """Normalize one Garmin activity into calculation-friendly fields."""
     activity_id = activity.get("activityId")
@@ -68,7 +91,7 @@ def normalize_activity(activity: dict[str, Any]) -> ActivityMetrics:
 
     return ActivityMetrics(
         activity_id=activity_id,
-        calendar_date=start_time.date(),
+        calendar_date=_calendar_date(activity, start_time),
         start_time=start_time,
         activity_type=_activity_type(activity),
         duration_minutes=round(duration_seconds / 60.0, 3),
@@ -93,7 +116,14 @@ def normalize_activities(
     for raw in activities:
         normalized = normalize_activity(raw)
         by_id.setdefault(normalized.activity_id, normalized)
-    return sorted(by_id.values(), key=lambda item: item.start_time)
+    return sorted(
+        by_id.values(),
+        key=lambda item: (
+            item.calendar_date,
+            item.start_time.replace(tzinfo=None).time(),
+            item.activity_id,
+        ),
+    )
 
 
 def analyze_garmin_load_coverage(
