@@ -19,6 +19,24 @@ def _make_client() -> GarminClient:
 class TestGarminHistoryClient:
     """Tests for history-specific Garmin access."""
 
+    async def test_get_daily_summary_is_strict_for_requested_date(self):
+        client = _make_client()
+        history = GarminHistoryClient(client)
+        target = date(2026, 9, 1)
+
+        with patch.object(
+            client, "_get_user_summary_raw", new_callable=AsyncMock
+        ) as mock_summary:
+            mock_summary.return_value = {
+                "calendarDate": "2026-09-01",
+                "restingHeartRate": 58,
+            }
+            summary = await history.get_daily_summary(target)
+
+        mock_summary.assert_awaited_once_with(target)
+        assert summary["calendarDate"] == "2026-09-01"
+        assert summary["restingHeartRate"] == 58
+
     async def test_get_activities_by_date_single_day(self):
         client = _make_client()
         history = GarminHistoryClient(client)
@@ -108,3 +126,43 @@ class TestGarminHistoryClient:
                 )
 
         assert mock_req.await_count == 2
+
+    async def test_fetch_activity_metrics_normalizes_and_deduplicates(self):
+        client = _make_client()
+        history = GarminHistoryClient(client)
+        raw = [
+            {
+                "activityId": 2,
+                "startTimeGMT": "2026-09-02T08:00:00",
+                "startTimeLocal": "2026-09-02T10:00:00",
+                "activityType": {"typeKey": "walking"},
+                "duration": 1800,
+                "activityTrainingLoad": 4,
+            },
+            {
+                "activityId": 1,
+                "startTimeGMT": "2026-09-01T08:00:00",
+                "startTimeLocal": "2026-09-01T10:00:00",
+                "activityType": {"typeKey": "walking"},
+                "duration": 1200,
+            },
+            {
+                "activityId": 2,
+                "startTimeGMT": "2026-09-02T08:00:00",
+                "startTimeLocal": "2026-09-02T10:00:00",
+                "duration": 9999,
+            },
+        ]
+
+        with patch.object(
+            history, "get_activities_by_date", new_callable=AsyncMock
+        ) as mock_activities:
+            mock_activities.return_value = raw
+            metrics = await history.fetch_activity_metrics(
+                date(2026, 9, 1), date(2026, 9, 2)
+            )
+
+        assert [item.activity_id for item in metrics] == [1, 2]
+        assert metrics[0].duration_minutes == 20.0
+        assert metrics[1].duration_minutes == 30.0
+        assert metrics[1].garmin_training_load == 4.0
