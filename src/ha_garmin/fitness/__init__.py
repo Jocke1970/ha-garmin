@@ -46,11 +46,11 @@ from .trimp import (
 )
 
 __all__ = [
-    "AcwrPoint",
+    "GARMIN_FITNESS_ALGORITHM_VERSION",
     "ActivityMetrics",
     "ActivityTypeCoverage",
+    "AcwrPoint",
     "DailyLoad",
-    "GARMIN_FITNESS_ALGORITHM_VERSION",
     "GarminLoadCoverage",
     "GarminTrainingHistory",
     "LoadFocus",
