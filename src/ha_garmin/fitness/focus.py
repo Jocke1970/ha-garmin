@@ -1,4 +1,4 @@
-"""Training-effect load-focus helpers."""
+"""Training Effect load-focus helpers."""
 
 from __future__ import annotations
 
@@ -13,39 +13,29 @@ LoadFocus = Literal["aerobic", "anaerobic", "mixed", "unknown"]
 
 @dataclass(frozen=True, slots=True)
 class LoadFocusSummary:
-    """Garmin-load distribution by Training Effect focus."""
+    """Recent activity focus derived from Garmin Training Effect."""
 
     total_activities: int
-    activities_with_load: int
-    aerobic_load: float
-    anaerobic_load: float
-    mixed_load: float
-    unknown_load: float
+    classified_activities: int
+    average_aerobic_effect: float | None
+    average_anaerobic_effect: float | None
     complete: bool
     dominant_focus: LoadFocus
 
 
-def classify_load_focus(
-    activity: ActivityMetrics,
-    dominance_ratio: float = 1.5,
+def _focus_from_effects(
+    aerobic: float | None,
+    anaerobic: float | None,
+    dominance_ratio: float,
 ) -> LoadFocus:
-    """Classify one activity from Garmin aerobic/anaerobic Training Effect.
-
-    The classification follows the PulseCoach-inspired MVP rule from the
-    project roadmap: one side must exceed the other by ``dominance_ratio`` to
-    be considered dominant; otherwise the activity is mixed. Missing or wholly
-    zero Training Effect values are unknown.
-    """
+    """Classify a pair of aerobic/anaerobic Training Effect values."""
     if dominance_ratio <= 1.0:
         raise ValueError("dominance_ratio must be greater than 1")
-
-    aerobic = activity.aerobic_training_effect
-    anaerobic = activity.anaerobic_training_effect
-    if aerobic is None and anaerobic is None:
+    if aerobic is None or anaerobic is None:
         return "unknown"
 
-    aerobic_value = max(0.0, aerobic or 0.0)
-    anaerobic_value = max(0.0, anaerobic or 0.0)
+    aerobic_value = max(0.0, aerobic)
+    anaerobic_value = max(0.0, anaerobic)
     if aerobic_value == 0.0 and anaerobic_value == 0.0:
         return "unknown"
     if aerobic_value > anaerobic_value * dominance_ratio:
@@ -55,46 +45,67 @@ def classify_load_focus(
     return "mixed"
 
 
-def summarize_load_focus(
+def classify_activity_focus(
+    activity: ActivityMetrics,
+    dominance_ratio: float = 1.5,
+) -> LoadFocus:
+    """Classify one activity from Garmin aerobic/anaerobic Training Effect."""
+    return _focus_from_effects(
+        activity.aerobic_training_effect,
+        activity.anaerobic_training_effect,
+        dominance_ratio,
+    )
+
+
+def classify_load_focus(
     activities: Iterable[ActivityMetrics],
     dominance_ratio: float = 1.5,
 ) -> LoadFocusSummary:
-    """Summarize known Garmin training load by Training Effect focus.
+    """Classify recent training focus from average Garmin Training Effect.
 
-    Missing ``activityTrainingLoad`` is never treated as zero. ``complete`` is
-    false when any activity lacks Garmin load, making the summary suitable for
-    diagnostics before it is used as a user-facing load-focus metric.
+    This mirrors the PulseCoach-inspired MVP rule: average aerobic and
+    anaerobic Training Effect across activities that provide both values, then
+    require one average to exceed the other by ``dominance_ratio``. Activities
+    missing either Training Effect value are excluded and make ``complete``
+    false rather than being interpreted as zero.
     """
+    if dominance_ratio <= 1.0:
+        raise ValueError("dominance_ratio must be greater than 1")
+
     values = list(activities)
-    buckets: dict[LoadFocus, float] = {
-        "aerobic": 0.0,
-        "anaerobic": 0.0,
-        "mixed": 0.0,
-        "unknown": 0.0,
-    }
-    activities_with_load = 0
+    effect_pairs = [
+        (activity.aerobic_training_effect, activity.anaerobic_training_effect)
+        for activity in values
+        if activity.aerobic_training_effect is not None
+        and activity.anaerobic_training_effect is not None
+    ]
+    if not effect_pairs:
+        return LoadFocusSummary(
+            total_activities=len(values),
+            classified_activities=0,
+            average_aerobic_effect=None,
+            average_anaerobic_effect=None,
+            complete=not values,
+            dominant_focus="unknown",
+        )
 
-    for activity in values:
-        if activity.garmin_training_load is None:
-            continue
-        activities_with_load += 1
-        focus = classify_load_focus(activity, dominance_ratio)
-        buckets[focus] += activity.garmin_training_load
-
-    known_buckets: dict[LoadFocus, float] = {
-        key: value for key, value in buckets.items() if key != "unknown"
-    }
-    dominant: LoadFocus = "unknown"
-    if any(value > 0 for value in known_buckets.values()):
-        dominant = max(known_buckets, key=lambda key: known_buckets[key])
+    average_aerobic = sum(pair[0] for pair in effect_pairs if pair[0] is not None) / len(
+        effect_pairs
+    )
+    average_anaerobic = sum(
+        pair[1] for pair in effect_pairs if pair[1] is not None
+    ) / len(effect_pairs)
+    dominant = _focus_from_effects(
+        average_aerobic,
+        average_anaerobic,
+        dominance_ratio,
+    )
 
     return LoadFocusSummary(
         total_activities=len(values),
-        activities_with_load=activities_with_load,
-        aerobic_load=round(buckets["aerobic"], 3),
-        anaerobic_load=round(buckets["anaerobic"], 3),
-        mixed_load=round(buckets["mixed"], 3),
-        unknown_load=round(buckets["unknown"], 3),
-        complete=activities_with_load == len(values),
+        classified_activities=len(effect_pairs),
+        average_aerobic_effect=round(average_aerobic, 3),
+        average_anaerobic_effect=round(average_anaerobic, 3),
+        complete=len(effect_pairs) == len(values),
         dominant_focus=dominant,
     )
