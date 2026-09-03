@@ -5,8 +5,13 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable
 
+from .const import DEFAULT_PERSONAL_TRIMP_MAX, STRAIN_HARD_DAY_THRESHOLD
 
-def compute_strain_score(trimp: float, personal_trimp_max: float = 250.0) -> float:
+
+def compute_strain_score(
+    trimp: float,
+    personal_trimp_max: float = DEFAULT_PERSONAL_TRIMP_MAX,
+) -> float:
     """Convert TRIMP to a bounded 0-21 WHOOP-like strain score.
 
     The transformation is intentionally kept separate from canonical training
@@ -48,7 +53,7 @@ def calibrate_personal_trimp_max(
 
 def count_consecutive_hard_days(
     strain_scores_newest_first: Iterable[float],
-    threshold: float = 14.0,
+    threshold: float = STRAIN_HARD_DAY_THRESHOLD,
 ) -> int:
     """Count consecutive recent days above the hard-session threshold."""
     if threshold < 0:
