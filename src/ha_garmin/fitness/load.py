@@ -108,14 +108,40 @@ def normalize_activity(activity: dict[str, Any]) -> ActivityMetrics:
     )
 
 
+def _activity_quality(activity: ActivityMetrics) -> tuple[int, int]:
+    """Rank duplicate activity records by calculation-relevant completeness."""
+    optional_values = (
+        activity.distance_meters,
+        activity.avg_hr,
+        activity.max_hr,
+        activity.calories,
+        activity.aerobic_training_effect,
+        activity.anaerobic_training_effect,
+        activity.garmin_training_load,
+        activity.vo2max,
+        activity.avg_power,
+        activity.normalized_power,
+    )
+    populated = sum(value is not None for value in optional_values)
+    return populated, int(activity.duration_minutes > 0)
+
+
 def normalize_activities(
     activities: Iterable[dict[str, Any]],
 ) -> list[ActivityMetrics]:
-    """Normalize and deduplicate activities by Garmin activity ID."""
+    """Normalize and deduplicate activities by Garmin activity ID.
+
+    When duplicate records exist, prefer the richer copy. Garmin can briefly
+    expose a newly synced activity before all derived fields (for example
+    Training Load) have propagated, so keeping the first copy can permanently
+    preserve a poorer snapshot during paginated/backfill retrieval.
+    """
     by_id: dict[int, ActivityMetrics] = {}
     for raw in activities:
         normalized = normalize_activity(raw)
-        by_id.setdefault(normalized.activity_id, normalized)
+        existing = by_id.get(normalized.activity_id)
+        if existing is None or _activity_quality(normalized) > _activity_quality(existing):
+            by_id[normalized.activity_id] = normalized
     return sorted(
         by_id.values(),
         key=lambda item: (
