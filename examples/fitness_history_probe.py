@@ -1,8 +1,8 @@
 """Read-only Garmin Fitness history probe.
 
 Uses an existing ha-garmin token file. It performs no login and writes no data.
-The purpose is to validate historical activity retrieval and compare Garmin
-Training Load coverage with the inputs and daily context needed for TRIMP.
+The purpose is to validate historical activity retrieval, compare load-source
+coverage and optionally calculate complete Garmin/TRIMP Training series.
 """
 
 from __future__ import annotations
@@ -17,9 +17,13 @@ from typing import Any
 from ha_garmin import GarminAuth, GarminClient, GarminHistoryClient
 from ha_garmin.fitness import (
     GARMIN_FITNESS_ALGORITHM_VERSION,
+    TrainingHistoryResult,
     analyze_trimp_history_context,
     build_daily_garmin_load_series,
+    build_training_history_from_daily_loads,
+    build_trimp_training_history,
     compare_load_source_coverage,
+    export_training_history_rows,
 )
 
 
@@ -35,6 +39,18 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         default=90,
         help="Inclusive history window in days (default: 90)",
+    )
+    parser.add_argument(
+        "--max-hr",
+        type=float,
+        default=None,
+        help="Optional user max HR; enables full TRIMP calculation with --sex",
+    )
+    parser.add_argument(
+        "--sex",
+        choices=("male", "female"),
+        default=None,
+        help="Banister sex constant; enables full TRIMP calculation with --max-hr",
     )
     parser.add_argument(
         "--json",
@@ -56,9 +72,37 @@ def _json_ready(value: Any) -> Any:
     return value
 
 
-async def _run(token_path: str, days: int, json_output: bool = False) -> None:
+def _history_payload(history: TrainingHistoryResult) -> dict[str, Any]:
+    """Serialize one calculated source without exposing raw Garmin responses."""
+    payload: dict[str, Any] = {
+        "source": history.source,
+        "assessment": asdict(history.assessment),
+        "latest": None,
+        "rows": [],
+    }
+    if not history.assessment.ready:
+        return payload
+
+    rows = export_training_history_rows(history)
+    payload["rows"] = [asdict(row) for row in rows]
+    if rows:
+        payload["latest"] = asdict(rows[-1])
+    return payload
+
+
+async def _run(
+    token_path: str,
+    days: int,
+    json_output: bool = False,
+    max_hr: float | None = None,
+    sex: str | None = None,
+) -> None:
     if days <= 0:
         raise SystemExit("--days must be greater than zero")
+    if (max_hr is None) != (sex is None):
+        raise SystemExit("--max-hr and --sex must be supplied together")
+    if max_hr is not None and max_hr <= 0:
+        raise SystemExit("--max-hr must be greater than zero")
 
     auth = GarminAuth()
     if not auth.load_session(token_path):
@@ -68,20 +112,33 @@ async def _run(token_path: str, days: int, json_output: bool = False) -> None:
         )
 
     client = GarminClient(auth)
-    history = GarminHistoryClient(client)
+    history_client = GarminHistoryClient(client)
 
     end_date = date.today()
     start_date = end_date - timedelta(days=days - 1)
     activities, resting_hr = await asyncio.gather(
-        history.fetch_activity_metrics(start_date, end_date),
-        history.get_resting_heart_rate_range(start_date, end_date),
+        history_client.fetch_activity_metrics(start_date, end_date),
+        history_client.get_resting_heart_rate_range(start_date, end_date),
     )
     comparison = compare_load_source_coverage(activities)
     trimp_context = analyze_trimp_history_context(activities, resting_hr)
-    daily = build_daily_garmin_load_series(activities, start_date, end_date)
-    incomplete_days = [day for day in daily if not day.complete]
 
-    result = {
+    garmin_daily = build_daily_garmin_load_series(activities, start_date, end_date)
+    garmin_history = build_training_history_from_daily_loads("garmin", garmin_daily)
+    incomplete_days = [day for day in garmin_daily if not day.complete]
+
+    trimp_history: TrainingHistoryResult | None = None
+    if max_hr is not None and sex is not None:
+        trimp_history = build_trimp_training_history(
+            activities,
+            start_date,
+            end_date,
+            resting_hr,
+            user_max_hr=max_hr,
+            sex=sex,
+        )
+
+    result: dict[str, Any] = {
         "algorithm_version": GARMIN_FITNESS_ALGORITHM_VERSION,
         "range": {
             "start_date": start_date,
@@ -101,9 +158,18 @@ async def _run(token_path: str, days: int, json_output: bool = False) -> None:
             }
             for day in incomplete_days
         ],
+        "training": {
+            "garmin": _history_payload(garmin_history),
+            "trimp": _history_payload(trimp_history) if trimp_history else None,
+        },
+        "trimp_configuration": {
+            "configured": trimp_history is not None,
+            "max_hr": max_hr,
+            "sex": sex,
+        },
         "notes": {
             "read_only": True,
-            "trimp_requires_remaining_configuration": ["user_max_hr", "sex"],
+            "canonical_source_selected": False,
         },
     }
 
@@ -138,6 +204,7 @@ async def _run(token_path: str, days: int, json_output: bool = False) -> None:
     print(f"Activities missing average HR: {trimp.missing_average_hr}")
     print(f"Activities missing duration: {trimp.missing_duration}")
     print(f"Incomplete Garmin-load activity days: {len(incomplete_days)}")
+    print(f"Garmin Training pipeline ready: {garmin_history.assessment.ready}")
 
     if comparison.by_activity_type:
         print("\nCoverage by activity type:")
@@ -163,12 +230,31 @@ async def _run(token_path: str, days: int, json_output: bool = False) -> None:
         for missing_date in trimp_context.missing_resting_hr_days[:10]:
             print(f"  {missing_date.isoformat()}")
 
-    print(
-        "\nNote: a full TRIMP calculation still needs configured user max HR and "
-        "sex. The probe intentionally does not infer either value."
-    )
+    if trimp_history is None:
+        print(
+            "\nTRIMP calculation not configured. Add --max-hr <bpm> --sex male|female "
+            "to calculate the complete TRIMP Training series."
+        )
+    else:
+        print(f"TRIMP Training pipeline ready: {trimp_history.assessment.ready}")
+        if trimp_history.assessment.ready and trimp_history.training_points:
+            latest = trimp_history.training_points[-1]
+            print(
+                "TRIMP latest: "
+                f"CTL {latest.ctl:.3f}, ATL {latest.atl:.3f}, TSB {latest.tsb:.3f}"
+            )
+
+    print("\nNo canonical load source is selected by this probe.")
 
 
 if __name__ == "__main__":
     args = _parser().parse_args()
-    asyncio.run(_run(args.token_path, args.days, args.json_output))
+    asyncio.run(
+        _run(
+            args.token_path,
+            args.days,
+            args.json_output,
+            args.max_hr,
+            args.sex,
+        )
+    )
