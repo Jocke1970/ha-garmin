@@ -4,6 +4,8 @@ from .const import GARMIN_FITNESS_ALGORITHM_VERSION
 from .diagnostics import (
     ActivityTypeCoverage,
     LoadSourceCoverageComparison,
+    TrimpHistoryContextCoverage,
+    analyze_trimp_history_context,
     compare_load_source_coverage,
 )
 from .export import TrainingHistoryExportRow, export_training_history_rows
@@ -59,8 +61,10 @@ __all__ = [
     "TrainingHistoryExportRow",
     "TrainingHistoryResult",
     "TrainingLoadPoint",
+    "TrimpHistoryContextCoverage",
     "TrimpInputCoverage",
     "analyze_garmin_load_coverage",
+    "analyze_trimp_history_context",
     "analyze_trimp_input_coverage",
     "assess_daily_load_series",
     "build_daily_garmin_load_series",
