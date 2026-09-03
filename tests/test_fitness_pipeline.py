@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 
 from ha_garmin.fitness import (
+    GARMIN_FITNESS_ALGORITHM_VERSION,
     build_garmin_training_history,
     build_training_history_from_daily_loads,
     build_trimp_training_history,
@@ -29,6 +30,7 @@ def test_pipeline_builds_all_metrics_for_complete_series():
         "garmin", _complete_daily_loads(42)
     )
 
+    assert result.algorithm_version == GARMIN_FITNESS_ALGORITHM_VERSION
     assert result.assessment.ready
     assert result.assessment.total_days == 42
     assert len(result.training_points) == 42
@@ -55,6 +57,7 @@ def test_pipeline_returns_diagnostics_instead_of_deriving_from_incomplete_load()
 
     result = build_training_history_from_daily_loads("garmin", loads)
 
+    assert result.algorithm_version == GARMIN_FITNESS_ALGORITHM_VERSION
     assert not result.assessment.ready
     assert result.assessment.incomplete_days == (date(2026, 8, 5),)
     assert result.training_points == ()
@@ -84,6 +87,7 @@ def test_garmin_pipeline_reports_load_coverage_and_rest_days():
     assert result.load_coverage.total_activities == 2
     assert result.load_coverage.activities_with_load == 1
     assert result.load_coverage.coverage_percent == 50.0
+    assert result.history.algorithm_version == GARMIN_FITNESS_ALGORITHM_VERSION
     assert result.history.assessment.activity_days == 2
     assert result.history.assessment.rest_days == 1
     assert result.history.assessment.incomplete_days == (date(2026, 8, 3),)
@@ -114,6 +118,7 @@ def test_trimp_pipeline_is_independent_of_garmin_load_field():
     )
 
     assert result.source == "trimp"
+    assert result.algorithm_version == GARMIN_FITNESS_ALGORITHM_VERSION
     assert result.assessment.ready
     assert result.daily_loads[0].load is not None
     assert result.daily_loads[1].load == 0.0
