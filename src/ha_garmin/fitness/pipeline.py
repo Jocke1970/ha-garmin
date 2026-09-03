@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 
 from .load import (
     analyze_garmin_load_coverage,
@@ -103,7 +103,7 @@ def build_training_history_from_daily_loads(
 
 
 def build_garmin_training_history(
-    raw_activities: Iterable[dict[str, object]],
+    raw_activities: Iterable[dict[str, Any]],
     start_date: date,
     end_date: date,
 ) -> GarminTrainingHistory:
