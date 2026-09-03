@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from .const import ACTIVITIES_URL
 from .exceptions import GarminAPIError
+from .fitness import ActivityMetrics, normalize_activities
 
 if TYPE_CHECKING:
     from .client import GarminClient
@@ -31,6 +32,10 @@ class GarminHistoryClient:
     def __init__(self, client: GarminClient) -> None:
         """Initialize a history helper around an authenticated Garmin client."""
         self._client = client
+
+    async def get_daily_summary(self, target_date: date) -> dict[str, Any]:
+        """Fetch exactly one Garmin daily summary without date fallback."""
+        return await self._client._get_user_summary_raw(target_date)
 
     async def get_activities_by_date(
         self,
@@ -82,3 +87,19 @@ class GarminHistoryClient:
             "Activities-by-date pagination exceeded safety limit "
             f"({self._MAX_PAGES} pages)"
         )
+
+    async def fetch_activity_metrics(
+        self,
+        start_date: date,
+        end_date: date | None = None,
+        activity_type: str | None = None,
+        sort_order: str | None = None,
+    ) -> list[ActivityMetrics]:
+        """Fetch, normalize and deduplicate historical activities."""
+        raw = await self.get_activities_by_date(
+            start_date,
+            end_date,
+            activity_type=activity_type,
+            sort_order=sort_order,
+        )
+        return normalize_activities(raw)
