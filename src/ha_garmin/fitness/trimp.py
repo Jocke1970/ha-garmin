@@ -1,0 +1,95 @@
+"""Banister TRIMP calculations for Garmin Fitness."""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Iterable, Mapping
+from datetime import date, timedelta
+from typing import Literal
+
+from .models import ActivityMetrics, DailyLoad
+
+Sex = Literal["male", "female"]
+
+
+def compute_trimp(
+    activity: ActivityMetrics,
+    resting_hr: float,
+    user_max_hr: float,
+    sex: Sex,
+) -> float | None:
+    """Compute Banister TRIMP for one activity.
+
+    Returns ``None`` when the activity lacks the HR/duration data required for
+    the calculation. Physiologically valid zero intensity remains ``0.0``.
+    """
+    if activity.avg_hr is None or activity.duration_minutes <= 0:
+        return None
+    if user_max_hr <= resting_hr:
+        raise ValueError("user_max_hr must be greater than resting_hr")
+
+    hr_ratio = (activity.avg_hr - resting_hr) / (user_max_hr - resting_hr)
+    hr_ratio = max(0.0, min(1.0, hr_ratio))
+    k = 1.67 if sex == "female" else 1.92
+    trimp = activity.duration_minutes * hr_ratio * math.exp(k * hr_ratio)
+    return round(trimp, 3)
+
+
+def build_daily_trimp_series(
+    activities: Iterable[ActivityMetrics],
+    start_date: date,
+    end_date: date,
+    resting_hr_by_date: Mapping[date, float],
+    user_max_hr: float,
+    sex: Sex,
+) -> list[DailyLoad]:
+    """Build a continuous daily TRIMP series without hiding missing inputs."""
+    if start_date > end_date:
+        raise ValueError("start_date cannot be after end_date")
+
+    grouped: dict[date, list[ActivityMetrics]] = {}
+    for activity in activities:
+        if start_date <= activity.calendar_date <= end_date:
+            grouped.setdefault(activity.calendar_date, []).append(activity)
+
+    result: list[DailyLoad] = []
+    current = start_date
+    while current <= end_date:
+        day_activities = grouped.get(current, [])
+        if not day_activities:
+            result.append(
+                DailyLoad(
+                    date=current,
+                    activity_count=0,
+                    loaded_activity_count=0,
+                    known_load=0.0,
+                    load=0.0,
+                    complete=True,
+                )
+            )
+            current += timedelta(days=1)
+            continue
+
+        resting_hr = resting_hr_by_date.get(current)
+        values: list[float] = []
+        if resting_hr is not None:
+            for activity in day_activities:
+                value = compute_trimp(activity, resting_hr, user_max_hr, sex)
+                if value is not None:
+                    values.append(value)
+
+        known_load = round(sum(values), 3)
+        complete = resting_hr is not None and len(values) == len(day_activities)
+        result.append(
+            DailyLoad(
+                date=current,
+                activity_count=len(day_activities),
+                loaded_activity_count=len(values),
+                known_load=known_load,
+                load=known_load if complete else None,
+                complete=complete,
+            )
+        )
+        current += timedelta(days=1)
+
+    return result
