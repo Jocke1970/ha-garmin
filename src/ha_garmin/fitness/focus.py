@@ -81,10 +81,12 @@ def summarize_load_focus(
         focus = classify_load_focus(activity, dominance_ratio)
         buckets[focus] += activity.garmin_training_load
 
-    known_buckets = {key: value for key, value in buckets.items() if key != "unknown"}
+    known_buckets: dict[LoadFocus, float] = {
+        key: value for key, value in buckets.items() if key != "unknown"
+    }
     dominant: LoadFocus = "unknown"
     if any(value > 0 for value in known_buckets.values()):
-        dominant = max(known_buckets, key=known_buckets.get)  # type: ignore[arg-type]
+        dominant = max(known_buckets, key=lambda key: known_buckets[key])
 
     return LoadFocusSummary(
         total_activities=len(values),
