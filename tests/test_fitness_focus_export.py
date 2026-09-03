@@ -4,10 +4,10 @@ import pytest
 
 from ha_garmin.fitness import (
     build_training_history_from_daily_loads,
+    classify_activity_focus,
     classify_load_focus,
     export_training_history_rows,
     normalize_activity,
-    summarize_load_focus,
 )
 from ha_garmin.fitness.models import DailyLoad
 
@@ -31,36 +31,50 @@ def _activity(
     )
 
 
-def test_load_focus_classification():
-    assert classify_load_focus(_activity(1, 3.0, 1.0, 10.0)) == "aerobic"
-    assert classify_load_focus(_activity(2, 1.0, 3.0, 10.0)) == "anaerobic"
-    assert classify_load_focus(_activity(3, 2.0, 1.5, 10.0)) == "mixed"
-    assert classify_load_focus(_activity(4, None, None, 10.0)) == "unknown"
-    assert classify_load_focus(_activity(5, 0.0, 0.0, 10.0)) == "unknown"
+def test_activity_focus_classification():
+    assert classify_activity_focus(_activity(1, 3.0, 1.0, 10.0)) == "aerobic"
+    assert classify_activity_focus(_activity(2, 1.0, 3.0, 10.0)) == "anaerobic"
+    assert classify_activity_focus(_activity(3, 2.0, 1.5, 10.0)) == "mixed"
+    assert classify_activity_focus(_activity(4, None, None, 10.0)) == "unknown"
+    assert classify_activity_focus(_activity(5, 0.0, 0.0, 10.0)) == "unknown"
 
 
-def test_load_focus_summary_preserves_missing_load_as_incomplete():
+def test_load_focus_uses_average_training_effect():
     activities = [
-        _activity(1, 3.0, 1.0, 12.0),
-        _activity(2, 1.0, 3.0, 8.0),
-        _activity(3, 2.0, 1.5, 5.0),
-        _activity(4, 3.0, 1.0, None),
+        _activity(1, 4.0, 1.0, None),
+        _activity(2, 3.0, 1.0, None),
+        _activity(3, 2.0, 1.0, None),
     ]
 
-    summary = summarize_load_focus(activities)
+    summary = classify_load_focus(activities)
 
-    assert summary.total_activities == 4
-    assert summary.activities_with_load == 3
-    assert summary.aerobic_load == 12.0
-    assert summary.anaerobic_load == 8.0
-    assert summary.mixed_load == 5.0
+    assert summary.total_activities == 3
+    assert summary.classified_activities == 3
+    assert summary.average_aerobic_effect == 3.0
+    assert summary.average_anaerobic_effect == 1.0
+    assert summary.dominant_focus == "aerobic"
+    assert summary.complete
+
+
+def test_load_focus_excludes_missing_training_effect_without_turning_it_into_zero():
+    activities = [
+        _activity(1, 3.0, 1.0, None),
+        _activity(2, None, None, None),
+    ]
+
+    summary = classify_load_focus(activities)
+
+    assert summary.total_activities == 2
+    assert summary.classified_activities == 1
+    assert summary.average_aerobic_effect == 3.0
+    assert summary.average_anaerobic_effect == 1.0
     assert summary.dominant_focus == "aerobic"
     assert not summary.complete
 
 
 def test_load_focus_validates_dominance_ratio():
     with pytest.raises(ValueError, match="greater than 1"):
-        classify_load_focus(_activity(1, 3.0, 1.0, 10.0), dominance_ratio=1.0)
+        classify_load_focus([_activity(1, 3.0, 1.0, 10.0)], dominance_ratio=1.0)
 
 
 def test_export_rows_align_late_starting_acwr_and_ramp_rate():
