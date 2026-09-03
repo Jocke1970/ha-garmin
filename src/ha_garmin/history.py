@@ -9,8 +9,14 @@ from __future__ import annotations
 
 from datetime import date
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
-from .const import ACTIVITIES_URL
+from .const import (
+    ACTIVITIES_URL,
+    RESTING_HEART_RATE_METRIC_ID,
+    RESTING_HEART_RATE_METRIC_KEY,
+    USER_STATS_DAILY_URL,
+)
 from .exceptions import GarminAPIError
 from .fitness import ActivityMetrics, normalize_activities
 
@@ -36,6 +42,71 @@ class GarminHistoryClient:
     async def get_daily_summary(self, target_date: date) -> dict[str, Any]:
         """Fetch exactly one Garmin daily summary without date fallback."""
         return await self._client._get_user_summary_raw(target_date)
+
+    async def get_resting_heart_rate_range(
+        self,
+        start_date: date,
+        end_date: date | None = None,
+    ) -> dict[date, float]:
+        """Return strict historical resting-HR measurements for a date range.
+
+        Garmin's user-stats endpoint can return the whole window in one request,
+        which is preferable to issuing one API call per day during backfill.
+        Missing or malformed dates are omitted rather than filled from adjacent
+        days.
+        """
+        if end_date is None:
+            end_date = start_date
+        if start_date > end_date:
+            raise ValueError("start_date cannot be after end_date")
+
+        profile = await self._client.get_user_profile()
+        url = f"{USER_STATS_DAILY_URL}/{quote(profile.display_name, safe='')}"
+        params = {
+            "fromDate": start_date.isoformat(),
+            "untilDate": end_date.isoformat(),
+            "metricId": RESTING_HEART_RATE_METRIC_ID,
+        }
+        data = await self._client._request("GET", url, params=params)
+        if not data:
+            return {}
+        if not isinstance(data, dict):
+            raise GarminAPIError(
+                "Unexpected resting-HR history response: expected an object"
+            )
+
+        all_metrics = data.get("allMetrics")
+        metrics_map = all_metrics.get("metricsMap") if isinstance(all_metrics, dict) else None
+        raw_values = (
+            metrics_map.get(RESTING_HEART_RATE_METRIC_KEY)
+            if isinstance(metrics_map, dict)
+            else None
+        )
+        if raw_values is None:
+            return {}
+        if not isinstance(raw_values, list):
+            raise GarminAPIError(
+                "Unexpected resting-HR history response: metric was not a list"
+            )
+
+        result: dict[date, float] = {}
+        for item in raw_values:
+            if not isinstance(item, dict):
+                continue
+            raw_date = item.get("calendarDate")
+            raw_value = item.get("value")
+            if not isinstance(raw_date, str) or isinstance(raw_value, bool):
+                continue
+            try:
+                measurement_date = date.fromisoformat(raw_date)
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            if value <= 0 or value != value or value in (float("inf"), float("-inf")):
+                continue
+            if start_date <= measurement_date <= end_date:
+                result[measurement_date] = value
+        return result
 
     async def get_activities_by_date(
         self,
