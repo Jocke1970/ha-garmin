@@ -31,7 +31,9 @@ def compute_ctl_atl_tsb(
         if index and day.date != days[index - 1].date + timedelta(days=1):
             raise ValueError("Daily load series must contain consecutive dates")
 
-    first_load = float(days[0].load)
+    first_value = days[0].load
+    assert first_value is not None
+    first_load = float(first_value)
     ctl = first_load
     atl = first_load
     result = [
@@ -45,6 +47,7 @@ def compute_ctl_atl_tsb(
     ]
 
     for day in days[1:]:
+        assert day.load is not None
         load = float(day.load)
         ctl = (_CTL_ALPHA * load) + ((1.0 - _CTL_ALPHA) * ctl)
         atl = (_ATL_ALPHA * load) + ((1.0 - _ATL_ALPHA) * atl)
