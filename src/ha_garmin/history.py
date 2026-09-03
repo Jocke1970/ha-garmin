@@ -76,7 +76,9 @@ class GarminHistoryClient:
             )
 
         all_metrics = data.get("allMetrics")
-        metrics_map = all_metrics.get("metricsMap") if isinstance(all_metrics, dict) else None
+        metrics_map = (
+            all_metrics.get("metricsMap") if isinstance(all_metrics, dict) else None
+        )
         raw_values = (
             metrics_map.get(RESTING_HEART_RATE_METRIC_KEY)
             if isinstance(metrics_map, dict)
