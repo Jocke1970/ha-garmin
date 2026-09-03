@@ -2,7 +2,7 @@
 
 Uses an existing ha-garmin token file. It performs no login and writes no data.
 The purpose is to validate historical activity retrieval and compare Garmin
-Training Load coverage with the activity-level inputs needed for TRIMP.
+Training Load coverage with the inputs and daily context needed for TRIMP.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from typing import Any
 from ha_garmin import GarminAuth, GarminClient, GarminHistoryClient
 from ha_garmin.fitness import (
     GARMIN_FITNESS_ALGORITHM_VERSION,
+    analyze_trimp_history_context,
     build_daily_garmin_load_series,
     compare_load_source_coverage,
 )
@@ -71,8 +72,12 @@ async def _run(token_path: str, days: int, json_output: bool = False) -> None:
 
     end_date = date.today()
     start_date = end_date - timedelta(days=days - 1)
-    activities = await history.fetch_activity_metrics(start_date, end_date)
+    activities, resting_hr = await asyncio.gather(
+        history.fetch_activity_metrics(start_date, end_date),
+        history.get_resting_heart_rate_range(start_date, end_date),
+    )
     comparison = compare_load_source_coverage(activities)
+    trimp_context = analyze_trimp_history_context(activities, resting_hr)
     daily = build_daily_garmin_load_series(activities, start_date, end_date)
     incomplete_days = [day for day in daily if not day.complete]
 
@@ -85,6 +90,8 @@ async def _run(token_path: str, days: int, json_output: bool = False) -> None:
         },
         "garmin_load": asdict(comparison.garmin),
         "trimp_activity_inputs": asdict(comparison.trimp),
+        "trimp_history_context": asdict(trimp_context),
+        "resting_hr_measurements": len(resting_hr),
         "by_activity_type": [asdict(row) for row in comparison.by_activity_type],
         "garmin_load_incomplete_days": [
             {
@@ -96,11 +103,7 @@ async def _run(token_path: str, days: int, json_output: bool = False) -> None:
         ],
         "notes": {
             "read_only": True,
-            "trimp_requires_additional_context": [
-                "resting_hr_for_each_activity_day",
-                "user_max_hr",
-                "sex",
-            ],
+            "trimp_requires_remaining_configuration": ["user_max_hr", "sex"],
         },
     }
 
@@ -124,6 +127,13 @@ async def _run(token_path: str, days: int, json_output: bool = False) -> None:
         f"{trimp.eligible_activities}/{trimp.total_activities} "
         f"({trimp.coverage_percent:.1f}%)"
     )
+    print(
+        "TRIMP fully eligible activity days (including resting HR): "
+        f"{trimp_context.fully_eligible_activity_days}/{trimp_context.activity_days} "
+        f"({trimp_context.fully_eligible_percent:.1f}%)"
+    )
+    print(f"Resting-HR measurements in range: {len(resting_hr)}")
+    print(f"Activity days missing resting HR: {len(trimp_context.missing_resting_hr_days)}")
     print(f"Activities without Garmin load: {garmin.activities_without_load}")
     print(f"Activities missing average HR: {trimp.missing_average_hr}")
     print(f"Activities missing duration: {trimp.missing_duration}")
@@ -148,9 +158,14 @@ async def _run(token_path: str, days: int, json_output: bool = False) -> None:
                 f"{day.loaded_activity_count}/{day.activity_count} activities with load"
             )
 
+    if trimp_context.missing_resting_hr_days:
+        print("\nFirst activity days missing resting HR:")
+        for missing_date in trimp_context.missing_resting_hr_days[:10]:
+            print(f"  {missing_date.isoformat()}")
+
     print(
-        "\nNote: TRIMP also needs resting HR for each activity day and a configured "
-        "max HR/sex. This probe only reports activity-level eligibility."
+        "\nNote: a full TRIMP calculation still needs configured user max HR and "
+        "sex. The probe intentionally does not infer either value."
     )
 
 
