@@ -97,12 +97,16 @@ class GarminHistoryClient:
                 continue
             raw_date = item.get("calendarDate")
             raw_value = item.get("value")
-            if not isinstance(raw_date, str) or isinstance(raw_value, bool):
+            if (
+                not isinstance(raw_date, str)
+                or isinstance(raw_value, bool)
+                or not isinstance(raw_value, (int, float, str))
+            ):
                 continue
             try:
                 measurement_date = date.fromisoformat(raw_date)
                 value = float(raw_value)
-            except (TypeError, ValueError):
+            except ValueError:
                 continue
             if value <= 0 or value != value or value in (float("inf"), float("-inf")):
                 continue
