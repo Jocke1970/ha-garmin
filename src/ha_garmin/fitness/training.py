@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import timedelta
 
+from .const import ATL_PERIOD_DAYS, CTL_PERIOD_DAYS
 from .models import DailyLoad, TrainingLoadPoint
 
-_CTL_ALPHA = 2.0 / (42.0 + 1.0)
-_ATL_ALPHA = 2.0 / (7.0 + 1.0)
+_CTL_ALPHA = 2.0 / (CTL_PERIOD_DAYS + 1.0)
+_ATL_ALPHA = 2.0 / (ATL_PERIOD_DAYS + 1.0)
 
 
 def compute_ctl_atl_tsb(
