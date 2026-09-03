@@ -24,6 +24,11 @@ from .pipeline import (
     build_training_history_from_daily_loads,
     build_trimp_training_history,
 )
+from .strain import (
+    calibrate_personal_trimp_max,
+    compute_strain_score,
+    count_consecutive_hard_days,
+)
 from .training import compute_ctl_atl_tsb
 from .trimp import build_daily_trimp_series, compute_trimp
 
@@ -47,12 +52,15 @@ __all__ = [
     "build_garmin_training_history",
     "build_training_history_from_daily_loads",
     "build_trimp_training_history",
+    "calibrate_personal_trimp_max",
     "classify_activity_focus",
     "classify_load_focus",
     "compute_acwr",
     "compute_ctl_atl_tsb",
     "compute_ramp_rate",
+    "compute_strain_score",
     "compute_trimp",
+    "count_consecutive_hard_days",
     "export_training_history_rows",
     "normalize_activities",
     "normalize_activity",
