@@ -171,9 +171,7 @@ class TestGarminHistoryClient:
         history = GarminHistoryClient(client)
 
         with pytest.raises(ValueError, match="start_date cannot be after end_date"):
-            await history.get_activities_by_date(
-                date(2026, 9, 2), date(2026, 9, 1)
-            )
+            await history.get_activities_by_date(date(2026, 9, 2), date(2026, 9, 1))
 
     async def test_get_activities_by_date_rejects_unexpected_response(self):
         client = _make_client()
@@ -182,9 +180,7 @@ class TestGarminHistoryClient:
         with patch.object(client, "_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = {"unexpected": "object"}
             with pytest.raises(GarminAPIError, match="expected a list"):
-                await history.get_activities_by_date(
-                    date(2026, 8, 1), date(2026, 9, 1)
-                )
+                await history.get_activities_by_date(date(2026, 8, 1), date(2026, 9, 1))
 
     async def test_get_activities_by_date_pagination_is_bounded(self):
         client = _make_client()
@@ -194,10 +190,10 @@ class TestGarminHistoryClient:
 
         with patch.object(client, "_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = [{"activityId": 1}]
-            with pytest.raises(GarminAPIError, match="pagination exceeded safety limit"):
-                await history.get_activities_by_date(
-                    date(2026, 8, 1), date(2026, 9, 1)
-                )
+            with pytest.raises(
+                GarminAPIError, match="pagination exceeded safety limit"
+            ):
+                await history.get_activities_by_date(date(2026, 8, 1), date(2026, 9, 1))
 
         assert mock_req.await_count == 2
 
