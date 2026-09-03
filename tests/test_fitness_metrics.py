@@ -6,7 +6,9 @@ from ha_garmin.fitness.metrics import compute_acwr, compute_ramp_rate
 from ha_garmin.fitness.models import DailyLoad, TrainingLoadPoint
 
 
-def _daily_loads(values: list[float], start: date = date(2026, 8, 1)) -> list[DailyLoad]:
+def _daily_loads(
+    values: list[float], start: date = date(2026, 8, 1)
+) -> list[DailyLoad]:
     return [
         DailyLoad(
             date=start + timedelta(days=index),
