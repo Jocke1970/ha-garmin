@@ -8,12 +8,14 @@ from .exceptions import (
     GarminMFARequired,
     GarminRateLimitError,
 )
+from .history import GarminHistoryClient
 
 __all__ = [
     "GarminAuth",
     "GarminAuthError",
     "GarminClient",
     "GarminConnectError",
+    "GarminHistoryClient",
     "GarminMFARequired",
     "GarminRateLimitError",
 ]
