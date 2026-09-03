@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+from .const import ACWR_ACUTE_DAYS, ACWR_CHRONIC_DAYS, RAMP_RATE_PERIOD_DAYS
 from .models import DailyLoad, TrainingLoadPoint
 
 
@@ -31,8 +32,8 @@ class RampRatePoint:
 
 def compute_acwr(
     daily_loads: Iterable[DailyLoad],
-    acute_days: int = 7,
-    chronic_days: int = 28,
+    acute_days: int = ACWR_ACUTE_DAYS,
+    chronic_days: int = ACWR_CHRONIC_DAYS,
 ) -> list[AcwrPoint]:
     """Compute rolling-average ACWR once a full chronic window exists.
 
@@ -76,7 +77,7 @@ def compute_acwr(
 
 def compute_ramp_rate(
     training_points: Iterable[TrainingLoadPoint],
-    period_days: int = 7,
+    period_days: int = RAMP_RATE_PERIOD_DAYS,
 ) -> list[RampRatePoint]:
     """Compute CTL change compared with ``period_days`` earlier."""
     if period_days <= 0:
