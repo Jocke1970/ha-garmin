@@ -133,3 +133,16 @@ def test_normalize_activity_requires_valid_identity_and_time():
         normalize_activity({"startTimeGMT": "2026-09-01T10:00:00"})
     with pytest.raises(ValueError, match="start timestamp"):
         normalize_activity({"activityId": 1})
+
+
+def test_normalize_activity_uses_local_calendar_date_not_utc_date():
+    activity = normalize_activity(
+        {
+            "activityId": 99,
+            "startTimeGMT": "2026-08-31T22:30:00",
+            "startTimeLocal": "2026-09-01T00:30:00",
+        }
+    )
+
+    assert activity.start_time == datetime(2026, 8, 31, 22, 30, tzinfo=UTC)
+    assert activity.calendar_date == date(2026, 9, 1)
