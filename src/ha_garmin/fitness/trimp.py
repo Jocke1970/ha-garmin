@@ -4,12 +4,48 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Literal
 
 from .models import ActivityMetrics, DailyLoad
 
 Sex = Literal["male", "female"]
+
+
+@dataclass(frozen=True, slots=True)
+class TrimpInputCoverage:
+    """Coverage of activity-level inputs required for TRIMP."""
+
+    total_activities: int
+    eligible_activities: int
+    ineligible_activities: int
+    missing_average_hr: int
+    missing_duration: int
+    coverage_percent: float
+
+
+def analyze_trimp_input_coverage(
+    activities: Iterable[ActivityMetrics],
+) -> TrimpInputCoverage:
+    """Report whether activities contain average HR and positive duration."""
+    values = list(activities)
+    missing_hr = sum(activity.avg_hr is None for activity in values)
+    missing_duration = sum(activity.duration_minutes <= 0 for activity in values)
+    eligible = sum(
+        activity.avg_hr is not None and activity.duration_minutes > 0
+        for activity in values
+    )
+    total = len(values)
+    percent = round((eligible / total) * 100.0, 1) if total else 0.0
+    return TrimpInputCoverage(
+        total_activities=total,
+        eligible_activities=eligible,
+        ineligible_activities=total - eligible,
+        missing_average_hr=missing_hr,
+        missing_duration=missing_duration,
+        coverage_percent=percent,
+    )
 
 
 def compute_trimp(
