@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Literal
 
+from .const import BANISTER_TRIMP_K_FEMALE, BANISTER_TRIMP_K_MALE
 from .models import ActivityMetrics, DailyLoad
 
 Sex = Literal["male", "female"]
@@ -66,7 +67,7 @@ def compute_trimp(
 
     hr_ratio = (activity.avg_hr - resting_hr) / (user_max_hr - resting_hr)
     hr_ratio = max(0.0, min(1.0, hr_ratio))
-    k = 1.67 if sex == "female" else 1.92
+    k = BANISTER_TRIMP_K_FEMALE if sex == "female" else BANISTER_TRIMP_K_MALE
     trimp = activity.duration_minutes * hr_ratio * math.exp(k * hr_ratio)
     return round(trimp, 3)
 
