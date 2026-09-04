@@ -1,4 +1,4 @@
-"""Dynamic Garmin activity type registry and gear-default resolution.
+"""Dynamic Garmin activity type registry and gear activity metadata.
 
 The registry learns activity types from the normal activity list response at
 no additional API cost. Garmin's canonical activity type hierarchy is also
@@ -6,9 +6,9 @@ loaded lazily as a cached bootstrap when gear data is fetched, so old/default
 activity types are resolved even when they have not appeared in recent
 activities.
 
-Keeping Garmin's numeric IDs out of presentation code means newly introduced
-activity types can be understood automatically without maintaining a static
-``type_XX`` mapping in Home Assistant.
+The newest activity is also checked for associated gear. That lookup is cached
+per activity, so it costs one extra API request when a new activity appears,
+not one request per gear or per coordinator poll.
 """
 
 from __future__ import annotations
@@ -20,13 +20,15 @@ from typing import Any, TypedDict
 
 from .auth import GarminAuth
 from .client import GarminClient as _BaseGarminClient
-from .const import GARMIN_CONNECT_API
+from .client import _validate_positive_int
+from .const import GARMIN_CONNECT_API, GEAR_URL
 from .exceptions import GarminConnectError
 
 _LOGGER = logging.getLogger(__name__)
 
 _ACTIVITY_TYPES_URL = f"{GARMIN_CONNECT_API}/activity-service/activity/activityTypes"
 _ACTIVITY_TYPES_CACHE_TTL = timedelta(hours=24)
+_ACTIVITY_GEAR_EMPTY_RETRY_LIMIT = 3
 
 
 class ActivityType(TypedDict):
@@ -73,15 +75,68 @@ def _normalise_activity_type(raw: dict[str, Any]) -> ActivityType | None:
     }
 
 
+def _normalise_activity_start(value: Any) -> str | None:
+    """Return a UTC ISO timestamp suitable for Home Assistant attributes."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat()
+
+
+def _activity_summary(activity: dict[str, Any]) -> dict[str, Any] | None:
+    """Build the compact activity payload stored on matching gear."""
+    raw_activity_id = activity.get("activityId")
+    if raw_activity_id is None:
+        return None
+    try:
+        activity_id = int(raw_activity_id)
+    except (TypeError, ValueError):
+        return None
+
+    raw_type = activity.get("activityType")
+    type_key: str | None = None
+    type_id: int | None = None
+    parent_type_id: int | None = None
+    if isinstance(raw_type, dict):
+        normalised_type = _normalise_activity_type(raw_type)
+        if normalised_type is not None:
+            type_key = normalised_type["typeKey"]
+            type_id = normalised_type["typeId"]
+            parent_type_id = normalised_type["parentTypeId"]
+        elif raw_type.get("typeKey"):
+            type_key = str(raw_type["typeKey"])
+    elif raw_type:
+        type_key = str(raw_type)
+
+    summary = {
+        "activity_id": activity_id,
+        "name": activity.get("activityName"),
+        "type": type_key,
+        "type_id": type_id,
+        "parent_type_id": parent_type_id,
+        "start": _normalise_activity_start(activity.get("startTimeGMT")),
+        "distance_m": activity.get("distance"),
+        "duration_s": activity.get("duration"),
+    }
+    return {key: value for key, value in summary.items() if value is not None}
+
+
 class GarminClient(_BaseGarminClient):
-    """Garmin client with a cached, live activity type registry."""
+    """Garmin client with cached activity types and latest gear activity."""
 
     def __init__(self, auth: GarminAuth, is_cn: bool = False) -> None:
-        """Initialize the client and activity type registry cache."""
+        """Initialize client-side registries and caches."""
         super().__init__(auth, is_cn=is_cn)
         self._activity_type_registry: dict[int, ActivityType] = {}
         self._activity_type_registry_refreshed: datetime | None = None
         self._activity_type_registry_lock = asyncio.Lock()
+        self._activity_gear_cache: tuple[int, list[dict[str, Any]], int] | None = None
+        self._last_activity_by_gear: dict[str, dict[str, Any]] = {}
 
     def activity_type_registry(self) -> dict[int, ActivityType]:
         """Return a defensive copy of the currently cached registry."""
@@ -107,12 +162,69 @@ class GarminClient(_BaseGarminClient):
             if item is not None:
                 self._activity_type_registry[item["typeId"]] = item
 
+    async def get_activity_gear(self, activity_id: int) -> list[dict[str, Any]]:
+        """Return gear associated with one Garmin activity."""
+        activity_id = _validate_positive_int(activity_id, "activity_id")
+        params = {"activityId": str(activity_id)}
+        data = await self._request("GET", GEAR_URL, params=params)
+        return data if isinstance(data, list) else []
+
+    async def _process_latest_activity_gear(
+        self, activities: list[dict[str, Any]]
+    ) -> None:
+        """Update last-activity metadata for gear used by the newest activity."""
+        if not activities:
+            return
+
+        latest = activities[0]
+        raw_activity_id = latest.get("activityId")
+        if raw_activity_id is None:
+            return
+        try:
+            activity_id = int(raw_activity_id)
+        except (TypeError, ValueError):
+            return
+
+        empty_polls = 0
+        if self._activity_gear_cache is not None:
+            cached_id, cached_gear, cached_empty_polls = self._activity_gear_cache
+            if cached_id == activity_id:
+                if cached_gear or cached_empty_polls >= _ACTIVITY_GEAR_EMPTY_RETRY_LIMIT:
+                    return
+                empty_polls = cached_empty_polls
+
+        try:
+            gear = await self.get_activity_gear(activity_id)
+        except GarminConnectError as err:
+            # Activity data is primary; a failed auxiliary gear lookup must not
+            # make the complete Activity coordinator unavailable.
+            _LOGGER.debug("Activity gear lookup failed for %s: %s", activity_id, err)
+            return
+
+        if not gear:
+            self._activity_gear_cache = (activity_id, [], empty_polls + 1)
+            return
+
+        self._activity_gear_cache = (activity_id, gear, 0)
+        summary = _activity_summary(latest)
+        if summary is None:
+            return
+
+        for gear_item in gear:
+            if not isinstance(gear_item, dict):
+                continue
+            gear_uuid = gear_item.get("uuid") or gear_item.get("gearUuid")
+            if gear_uuid:
+                self._last_activity_by_gear[str(gear_uuid)] = dict(summary)
+
     async def get_activities(
         self, start: int = 0, limit: int = 10
     ) -> list[dict[str, Any]]:
-        """Fetch activities and learn their Garmin activity type metadata."""
+        """Fetch activities and learn activity-type/gear metadata."""
         activities = await super().get_activities(start, limit)
         self._learn_activity_types(activities)
+        if start == 0:
+            await self._process_latest_activity_gear(activities)
         return activities
 
     async def get_activity_types(
@@ -194,7 +306,7 @@ class GarminClient(_BaseGarminClient):
         return data
 
     async def fetch_gear_data(self, timezone: str | None = None) -> dict[str, Any]:
-        """Fetch gear data and resolve default activity IDs via the registry."""
+        """Fetch gear data and enrich it with activity metadata."""
         activity_types = await self._get_activity_types_best_effort()
         data = await super().fetch_gear_data(timezone=timezone)
 
@@ -222,13 +334,17 @@ class GarminClient(_BaseGarminClient):
                 if not isinstance(gear_stat, dict):
                     continue
                 gear_uuid = gear_stat.get("uuid") or gear_stat.get("gearUuid")
-                details = defaults_by_gear.get(str(gear_uuid), []) if gear_uuid else []
+                gear_key = str(gear_uuid) if gear_uuid else ""
+                details = defaults_by_gear.get(gear_key, [])
                 gear_stat["defaultForActivity"] = [
                     detail["typeKey"] for detail in details
                 ]
                 gear_stat["defaultForActivityDetails"] = [
                     _copy_activity_type(detail) for detail in details
                 ]
+                last_activity = self._last_activity_by_gear.get(gear_key)
+                if last_activity is not None:
+                    gear_stat["lastActivity"] = dict(last_activity)
 
         data["activityTypes"] = activity_types
         return data
