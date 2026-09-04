@@ -4,6 +4,9 @@ GARMIN_FITNESS_ALGORITHM_VERSION = 1
 
 LOAD_SOURCE_GARMIN = "garmin"
 LOAD_SOURCE_TRIMP = "trimp"
+# Algorithm v1 canonical source selected after live 90-day validation.
+# Keep this explicit so persistence adapters never mix Garmin Load and TRIMP.
+CANONICAL_LOAD_SOURCE = LOAD_SOURCE_TRIMP
 
 CTL_PERIOD_DAYS = 42
 ATL_PERIOD_DAYS = 7
