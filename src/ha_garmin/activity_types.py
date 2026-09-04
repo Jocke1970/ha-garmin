@@ -137,7 +137,8 @@ class GarminClient(_BaseGarminClient):
             if (
                 not force_refresh
                 and self._activity_type_registry_refreshed is not None
-                and now - self._activity_type_registry_refreshed < _ACTIVITY_TYPES_CACHE_TTL
+                and now - self._activity_type_registry_refreshed
+                < _ACTIVITY_TYPES_CACHE_TTL
             ):
                 return self._activity_types_as_list()
 
