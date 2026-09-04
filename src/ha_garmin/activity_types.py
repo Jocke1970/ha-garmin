@@ -189,7 +189,10 @@ class GarminClient(_BaseGarminClient):
         if self._activity_gear_cache is not None:
             cached_id, cached_gear, cached_empty_polls = self._activity_gear_cache
             if cached_id == activity_id:
-                if cached_gear or cached_empty_polls >= _ACTIVITY_GEAR_EMPTY_RETRY_LIMIT:
+                if (
+                    cached_gear
+                    or cached_empty_polls >= _ACTIVITY_GEAR_EMPTY_RETRY_LIMIT
+                ):
                     return
                 empty_polls = cached_empty_polls
 
