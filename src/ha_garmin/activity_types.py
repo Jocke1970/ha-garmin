@@ -6,9 +6,9 @@ loaded lazily as a cached bootstrap when gear data is fetched, so old/default
 activity types are resolved even when they have not appeared in recent
 activities.
 
-The newest activity is also checked for associated gear. That lookup is cached
-per activity, so it costs one extra API request when a new activity appears,
-not one request per gear or per coordinator poll.
+The Activity fetch flow also checks the newest activity for associated gear.
+That lookup is cached per activity, so it costs one extra API request when a
+new activity appears, not one request per gear or per coordinator poll.
 """
 
 from __future__ import annotations
@@ -135,6 +135,7 @@ class GarminClient(_BaseGarminClient):
         self._activity_type_registry: dict[int, ActivityType] = {}
         self._activity_type_registry_refreshed: datetime | None = None
         self._activity_type_registry_lock = asyncio.Lock()
+        self._recent_activities_raw: list[dict[str, Any]] = []
         self._activity_gear_cache: tuple[int, list[dict[str, Any]], int] | None = None
         self._last_activity_by_gear: dict[str, dict[str, Any]] = {}
 
@@ -223,11 +224,11 @@ class GarminClient(_BaseGarminClient):
     async def get_activities(
         self, start: int = 0, limit: int = 10
     ) -> list[dict[str, Any]]:
-        """Fetch activities and learn activity-type/gear metadata."""
+        """Fetch activities and learn their Garmin activity type metadata."""
         activities = await super().get_activities(start, limit)
         self._learn_activity_types(activities)
         if start == 0:
-            await self._process_latest_activity_gear(activities)
+            self._recent_activities_raw = [dict(activity) for activity in activities]
         return activities
 
     async def get_activity_types(
@@ -273,12 +274,11 @@ class GarminClient(_BaseGarminClient):
                     if item is not None:
                         registry[item["typeId"]] = item
 
-            # A transient empty response must not wipe types learned from
-            # normal activity data or a previous successful hierarchy fetch.
+            # An empty response must not wipe types learned from normal
+            # activity data or a previous successful hierarchy fetch.
             if registry:
                 self._activity_type_registry.update(registry)
-                self._activity_type_registry_refreshed = now
-
+            self._activity_type_registry_refreshed = now
             return self._activity_types_as_list()
 
     async def _get_activity_types_best_effort(self) -> list[ActivityType]:
@@ -286,6 +286,9 @@ class GarminClient(_BaseGarminClient):
         try:
             return await self.get_activity_types()
         except GarminConnectError as err:
+            # Back off after an auxiliary endpoint failure; recent activity
+            # payloads continue teaching the registry for free in the meantime.
+            self._activity_type_registry_refreshed = datetime.now(UTC)
             _LOGGER.debug("Activity type registry refresh failed: %s", err)
             return self._activity_types_as_list()
 
@@ -303,8 +306,9 @@ class GarminClient(_BaseGarminClient):
     async def fetch_activity_data(
         self, target_date: date | None = None
     ) -> dict[str, Any]:
-        """Fetch activity data and expose types learned during that fetch."""
+        """Fetch activity data and update activity-driven gear metadata."""
         data = await super().fetch_activity_data(target_date)
+        await self._process_latest_activity_gear(self._recent_activities_raw)
         data["activityTypes"] = self._activity_types_as_list()
         return data
 
