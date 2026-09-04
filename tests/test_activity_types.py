@@ -59,29 +59,45 @@ async def test_get_activity_types_normalises_and_caches() -> None:
     request.assert_awaited_once()
 
 
-async def test_activity_fetch_learns_type_and_maps_latest_gear_once() -> None:
-    """A new activity teaches its type and costs one cached gear lookup."""
+async def test_get_activities_learns_type_without_auxiliary_request() -> None:
+    """Normal activity loading teaches types while retaining one API request."""
     client = _make_client()
     activities = [_ride()]
 
-    with (
-        patch.object(
-            _BaseGarminClient, "get_activities", new_callable=AsyncMock
-        ) as base_get,
-        patch.object(client, "get_activity_gear", new_callable=AsyncMock) as gear_get,
-    ):
+    with patch.object(
+        _BaseGarminClient, "get_activities", new_callable=AsyncMock
+    ) as base_get:
         base_get.return_value = activities
-        gear_get.return_value = [{"uuid": "gear-bike"}, {"uuid": "gear-shoes"}]
-        first = await client.get_activities(0, 10)
-        second = await client.get_activities(0, 10)
+        result = await client.get_activities(0, 10)
 
-    assert first == activities
-    assert second == activities
-    assert base_get.await_count == 2
-    gear_get.assert_awaited_once_with(123)
+    assert result == activities
+    base_get.assert_awaited_once_with(0, 10)
     assert client.activity_type_registry() == {
         152: {"typeId": 152, "typeKey": "virtual_ride", "parentTypeId": 2}
     }
+    assert client._recent_activities_raw == activities
+    assert client._last_activity_by_gear == {}
+
+
+async def test_activity_fetch_maps_latest_gear_once() -> None:
+    """The Activity fetch flow performs one cached gear lookup per activity."""
+    client = _make_client()
+    activities = [_ride()]
+    client._recent_activities_raw = activities
+
+    with (
+        patch.object(
+            _BaseGarminClient, "fetch_activity_data", new_callable=AsyncMock
+        ) as base_fetch,
+        patch.object(client, "get_activity_gear", new_callable=AsyncMock) as gear_get,
+    ):
+        base_fetch.return_value = {"lastActivity": {}, "lastActivities": []}
+        gear_get.return_value = [{"uuid": "gear-bike"}, {"uuid": "gear-shoes"}]
+        await client.fetch_activity_data()
+        await client.fetch_activity_data()
+
+    assert base_fetch.await_count == 2
+    gear_get.assert_awaited_once_with(123)
     expected = {
         "activity_id": 123,
         "name": "Morning ride",
@@ -99,18 +115,18 @@ async def test_activity_fetch_learns_type_and_maps_latest_gear_once() -> None:
 async def test_empty_activity_gear_is_retried_only_three_times() -> None:
     """A newly uploaded activity gets bounded retries while Garmin catches up."""
     client = _make_client()
-    activities = [_ride()]
+    client._recent_activities_raw = [_ride()]
 
     with (
         patch.object(
-            _BaseGarminClient, "get_activities", new_callable=AsyncMock
-        ) as base_get,
+            _BaseGarminClient, "fetch_activity_data", new_callable=AsyncMock
+        ) as base_fetch,
         patch.object(client, "get_activity_gear", new_callable=AsyncMock) as gear_get,
     ):
-        base_get.return_value = activities
+        base_fetch.return_value = {"lastActivity": {}, "lastActivities": []}
         gear_get.return_value = []
         for _ in range(5):
-            await client.get_activities(0, 10)
+            await client.fetch_activity_data()
 
     assert gear_get.await_count == 3
     assert client._last_activity_by_gear == {}
