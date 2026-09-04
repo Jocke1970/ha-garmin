@@ -13,6 +13,8 @@ Python client for Garmin Connect API, designed for Home Assistant integration.
 - **Midnight fallback** - automatically uses yesterday's data when today isn't ready yet
 - **Coordinator-based fetch** - optimized data fetching for Home Assistant multi-coordinator pattern
 - **Data transformations** - automatic unit conversions (seconds→minutes, grams→kg)
+- **Dynamic activity type registry** - learns Garmin `typeId`/`typeKey`/`parentTypeId` from normal activity data and refreshes the canonical hierarchy on a 24-hour cache
+- **Activity-driven Gear metadata** - maps recent activities to Gear with bounded/cached lookups instead of polling every Gear item
 
 ## Installation
 
@@ -113,9 +115,29 @@ Optimized methods that group related API calls for Home Assistant coordinators:
 | `fetch_training_data()` | 7 | Training readiness, status, HRV, lactate, endurance/hill scores |
 | `fetch_goals_data()` | 4 | Goals (active/future/history), badges, user level |
 | `fetch_gear_data()` | 6+ | Gear items, stats, device alarms, solar intensity, devices, last sync |
+
+> `fetch_gear_data()` also performs a best-effort activity-type hierarchy bootstrap when its 24-hour cache is stale. Normal recent activity fetches teach the registry at no additional API cost.
 | `fetch_blood_pressure_data()` | 1 | Blood pressure measurements |
 | `fetch_menstrual_data()` | 2 | Menstrual cycle data |
 | `fetch_nutrition_data()` | 1 | Nutrition log: consumed macros, goals, per-meal breakdown |
+
+## Gear and Activity Type Enrichment
+
+`ha-garmin` enriches Gear from the existing Activity flow rather than polling every Gear item for history.
+
+The dynamic Activity Type Registry stores Garmin's stable `typeId`, `typeKey`, and `parentTypeId` fields. It learns types for free from normal activity responses and uses Garmin's canonical activity-type hierarchy as a best-effort 24-hour cached bootstrap. This resolves Gear defaults such as `type_25` into stable keys such as `indoor_cycling` while still preserving the hierarchy in `defaultForActivityDetails`.
+
+The Activity fetch also scans its current recent-activity window newest-to-oldest and calls `get_activity_gear(activity_id)` for activities whose Gear mapping is not already cached. Matching Gear receives a compact `lastActivity` payload containing the activity ID, name, type metadata, UTC start time, distance, and duration when available.
+
+Request behaviour is intentionally bounded:
+
+- activity-to-Gear results are cached per activity ID;
+- after the recent window is primed, normal operation is roughly one additional Gear lookup when a new activity appears;
+- the newest activity can retry an empty Gear association up to three times to allow Garmin propagation delay;
+- older empty results are treated as stable after one lookup;
+- auxiliary activity-type or Gear lookup failures do not fail the primary coordinator data.
+
+The current Home Assistant integration uses a 10-activity recent window for bootstrap/backfill. Gear last used outside that window can therefore have historical usage statistics without a cached `lastActivity` until it is used again.
 
 ## Write / Action Methods
 
@@ -158,6 +180,8 @@ The method automatically fetches the correct meal slot ID and time for the day. 
 | `get_fitness_age()` | Fitness age metrics |
 | `get_hydration_data()` | Daily hydration |
 | `get_activities()` | Most recent activities (newest first, no date filter) |
+| `get_activity_types()` | Cached Garmin activity type hierarchy (`typeId`, `typeKey`, `parentTypeId`) |
+| `get_activity_gear(activity_id)` | Gear associated with one Garmin activity |
 | `get_activity(activity_id)` | Single activity summary (includes e-bike fields) |
 | `get_activity_details()` | Detailed activity with polyline |
 | `get_activity_hr_in_timezones()` | HR time in zones |
