@@ -17,7 +17,7 @@ from .const import (
     RESTING_HEART_RATE_METRIC_KEY,
     USER_STATS_DAILY_URL,
 )
-from .exceptions import GarminAPIError
+from .exceptions import GarminAPIError, GarminAuthError, GarminConnectError
 from .fitness import (
     ActivityMetrics,
     Sex,
@@ -28,6 +28,48 @@ from .fitness import (
 
 if TYPE_CHECKING:
     from .client import GarminClient
+
+_ACTIVITY_ENRICHMENT_KEYS = (
+    "averageHR",
+    "maxHR",
+    "duration",
+    "activityTrainingLoad",
+    "aerobicTrainingEffect",
+    "anaerobicTrainingEffect",
+)
+
+
+def _number(value: Any) -> float | None:
+    """Return a finite numeric value, otherwise None."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if result != result or result in (float("inf"), float("-inf")):
+        return None
+    return result
+
+
+def _activity_id(activity: dict[str, Any]) -> int | None:
+    """Return a valid Garmin activity ID from a raw activity."""
+    raw = activity.get("activityId")
+    if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+        return None
+    try:
+        activity_id = int(raw)
+    except ValueError:
+        return None
+    return activity_id if activity_id > 0 else None
+
+
+def _trimp_inputs_ready(activity: dict[str, Any]) -> bool:
+    """Return whether raw activity data has the inputs needed for TRIMP."""
+    return (
+        _number(activity.get("averageHR")) is not None
+        and (_number(activity.get("duration")) or 0) > 0
+    )
 
 
 class GarminHistoryClient:
@@ -171,6 +213,41 @@ class GarminHistoryClient:
             f"({self._MAX_PAGES} pages)"
         )
 
+    async def _enrich_trimp_activity_inputs(
+        self,
+        activities: list[dict[str, Any]],
+    ) -> None:
+        """Fill sparse TRIMP inputs from Garmin's single-activity summaries."""
+        by_id: dict[int, list[dict[str, Any]]] = {}
+        for activity in activities:
+            activity_id = _activity_id(activity)
+            if activity_id is not None:
+                by_id.setdefault(activity_id, []).append(activity)
+
+        for activity_id, copies in by_id.items():
+            if any(_trimp_inputs_ready(activity) for activity in copies):
+                continue
+
+            try:
+                summary = await self._client.get_activity(activity_id)
+            except GarminAuthError:
+                raise
+            except GarminConnectError:
+                continue
+            if not isinstance(summary, dict):
+                continue
+
+            source: dict[str, Any] = {}
+            summary_dto = summary.get("summaryDTO")
+            if isinstance(summary_dto, dict):
+                source.update(summary_dto)
+            source.update(summary)
+
+            for activity in copies:
+                for key in _ACTIVITY_ENRICHMENT_KEYS:
+                    if activity.get(key) is None and source.get(key) is not None:
+                        activity[key] = source[key]
+
     async def fetch_activity_metrics(
         self,
         start_date: date,
@@ -209,7 +286,9 @@ class GarminHistoryClient:
         if sex not in ("male", "female"):
             raise ValueError("sex must be male or female")
 
-        activities = await self.fetch_activity_metrics(start_date, end_date)
+        raw = await self.get_activities_by_date(start_date, end_date)
+        await self._enrich_trimp_activity_inputs(raw)
+        activities = normalize_activities(raw)
         resting_hr = await self.get_resting_heart_rate_range(start_date, end_date)
         return build_trimp_training_history(
             activities,
