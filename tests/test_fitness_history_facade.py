@@ -1,12 +1,12 @@
 """Tests for the Home Assistant-facing Garmin Fitness history facade."""
 
-from datetime import date, datetime
+from datetime import date
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from ha_garmin import GarminAuth, GarminClient, GarminHistoryClient
-from ha_garmin.fitness import CANONICAL_LOAD_SOURCE, ActivityMetrics
+from ha_garmin.fitness import CANONICAL_LOAD_SOURCE
 
 
 def _make_client() -> GarminClient:
@@ -15,24 +15,17 @@ def _make_client() -> GarminClient:
     return GarminClient(auth)
 
 
-def _activity() -> ActivityMetrics:
-    return ActivityMetrics(
-        activity_id=1,
-        calendar_date=date(2026, 9, 2),
-        start_time=datetime(2026, 9, 2, 18, 0),
-        activity_type="indoor_rowing",
-        duration_minutes=10.0,
-        distance_meters=None,
-        avg_hr=120.0,
-        max_hr=140.0,
-        calories=None,
-        aerobic_training_effect=None,
-        anaerobic_training_effect=None,
-        garmin_training_load=None,
-        vo2max=None,
-        avg_power=None,
-        normalized_power=None,
-    )
+def _raw_activity() -> dict:
+    return {
+        "activityId": 1,
+        "calendarDate": "2026-09-02",
+        "startTimeGMT": "2026-09-02T16:00:00",
+        "startTimeLocal": "2026-09-02T18:00:00",
+        "activityType": {"typeKey": "indoor_rowing"},
+        "duration": 600,
+        "averageHR": 120,
+        "maxHR": 140,
+    }
 
 
 async def test_fetch_trimp_training_history_reuses_strict_history_inputs() -> None:
@@ -44,9 +37,9 @@ async def test_fetch_trimp_training_history_reuses_strict_history_inputs() -> No
     with (
         patch.object(
             history,
-            "fetch_activity_metrics",
+            "get_activities_by_date",
             new_callable=AsyncMock,
-            return_value=[_activity()],
+            return_value=[_raw_activity()],
         ) as activity_fetch,
         patch.object(
             history,
