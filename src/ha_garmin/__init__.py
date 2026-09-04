@@ -1,7 +1,7 @@
 """Python client for Garmin Connect API."""
 
+from .activity_types import GarminClient
 from .auth import GarminAuth
-from .client import GarminClient
 from .exceptions import (
     GarminAuthError,
     GarminConnectError,
@@ -18,4 +18,4 @@ __all__ = [
     "GarminRateLimitError",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.38"
