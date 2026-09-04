@@ -157,9 +157,7 @@ class GarminClient(_BaseGarminClient):
         self._activity_type_registry_refreshed: datetime | None = None
         self._activity_type_registry_lock = asyncio.Lock()
         self._recent_activities_raw: list[dict[str, Any]] = []
-        self._activity_gear_cache: dict[
-            int, tuple[list[dict[str, Any]], int]
-        ] = {}
+        self._activity_gear_cache: dict[int, tuple[list[dict[str, Any]], int]] = {}
         self._last_activity_by_gear: dict[str, dict[str, Any]] = {}
 
     def activity_type_registry(self) -> dict[int, ActivityType]:
@@ -220,7 +218,10 @@ class GarminClient(_BaseGarminClient):
             if cached is not None:
                 cached_gear, cached_empty_polls = cached
                 empty_polls = cached_empty_polls
-                if cached_gear or cached_empty_polls >= _ACTIVITY_GEAR_EMPTY_RETRY_LIMIT:
+                if (
+                    cached_gear
+                    or cached_empty_polls >= _ACTIVITY_GEAR_EMPTY_RETRY_LIMIT
+                ):
                     gear = cached_gear
 
             if gear is None:
@@ -261,7 +262,9 @@ class GarminClient(_BaseGarminClient):
                 gear_key = str(gear_uuid)
                 if gear_key in resolved_this_pass:
                     continue
-                if _summary_is_newer(summary, self._last_activity_by_gear.get(gear_key)):
+                if _summary_is_newer(
+                    summary, self._last_activity_by_gear.get(gear_key)
+                ):
                     self._last_activity_by_gear[gear_key] = dict(summary)
                 resolved_this_pass.add(gear_key)
 
