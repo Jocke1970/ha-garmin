@@ -13,12 +13,16 @@ activity types can be understood automatically without maintaining a static
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, TypedDict
 
 from .auth import GarminAuth
 from .client import GarminClient as _BaseGarminClient
 from .const import GARMIN_CONNECT_API
+from .exceptions import GarminConnectError
+
+_LOGGER = logging.getLogger(__name__)
 
 _ACTIVITY_TYPES_URL = f"{GARMIN_CONNECT_API}/activity-service/activity/activityTypes"
 _ACTIVITY_TYPES_CACHE_TTL = timedelta(hours=24)
@@ -106,8 +110,7 @@ class GarminClient(_BaseGarminClient):
             not force_refresh
             and self._activity_type_registry
             and self._activity_type_registry_refreshed is not None
-            and now - self._activity_type_registry_refreshed
-            < _ACTIVITY_TYPES_CACHE_TTL
+            and now - self._activity_type_registry_refreshed < _ACTIVITY_TYPES_CACHE_TTL
         ):
             return self._activity_types_as_list()
 
@@ -145,6 +148,14 @@ class GarminClient(_BaseGarminClient):
 
             return self._activity_types_as_list()
 
+    async def _get_activity_types_best_effort(self) -> list[ActivityType]:
+        """Refresh the auxiliary registry without breaking primary data fetches."""
+        try:
+            return await self.get_activity_types()
+        except GarminConnectError as err:
+            _LOGGER.debug("Activity type registry refresh failed: %s", err)
+            return self._activity_types_as_list()
+
     def _resolve_activity_type(self, type_id: int) -> ActivityType:
         """Resolve one numeric Garmin activity type ID."""
         item = self._activity_type_registry.get(type_id)
@@ -160,14 +171,14 @@ class GarminClient(_BaseGarminClient):
         self, target_date: date | None = None
     ) -> dict[str, Any]:
         """Fetch activity data and attach the current activity type registry."""
-        activity_types = await self._safe_call(self.get_activity_types)
+        activity_types = await self._get_activity_types_best_effort()
         data = await super().fetch_activity_data(target_date)
-        data["activityTypes"] = activity_types or self._activity_types_as_list()
+        data["activityTypes"] = activity_types
         return data
 
     async def fetch_gear_data(self, timezone: str | None = None) -> dict[str, Any]:
         """Fetch gear data and resolve default activity IDs via the registry."""
-        activity_types = await self._safe_call(self.get_activity_types)
+        activity_types = await self._get_activity_types_best_effort()
         data = await super().fetch_gear_data(timezone=timezone)
 
         defaults = data.get("gearDefaults")
@@ -194,9 +205,7 @@ class GarminClient(_BaseGarminClient):
                 if not isinstance(gear_stat, dict):
                     continue
                 gear_uuid = gear_stat.get("uuid") or gear_stat.get("gearUuid")
-                details = (
-                    defaults_by_gear.get(str(gear_uuid), []) if gear_uuid else []
-                )
+                details = defaults_by_gear.get(str(gear_uuid), []) if gear_uuid else []
                 gear_stat["defaultForActivity"] = [
                     detail["typeKey"] for detail in details
                 ]
@@ -204,5 +213,5 @@ class GarminClient(_BaseGarminClient):
                     _copy_activity_type(detail) for detail in details
                 ]
 
-        data["activityTypes"] = activity_types or self._activity_types_as_list()
+        data["activityTypes"] = activity_types
         return data
