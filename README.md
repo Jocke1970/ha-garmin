@@ -115,11 +115,11 @@ Optimized methods that group related API calls for Home Assistant coordinators:
 | `fetch_training_data()` | 7 | Training readiness, status, HRV, lactate, endurance/hill scores |
 | `fetch_goals_data()` | 4 | Goals (active/future/history), badges, user level |
 | `fetch_gear_data()` | 6+ | Gear items, stats, device alarms, solar intensity, devices, last sync |
-
-> `fetch_gear_data()` also performs a best-effort activity-type hierarchy bootstrap when its 24-hour cache is stale. Normal recent activity fetches teach the registry at no additional API cost.
 | `fetch_blood_pressure_data()` | 1 | Blood pressure measurements |
 | `fetch_menstrual_data()` | 2 | Menstrual cycle data |
 | `fetch_nutrition_data()` | 1 | Nutrition log: consumed macros, goals, per-meal breakdown |
+
+> `fetch_gear_data()` also performs a best-effort activity-type hierarchy bootstrap when its 24-hour cache is stale. Normal recent activity fetches teach the registry at no additional API cost.
 
 ## Gear and Activity Type Enrichment
 
