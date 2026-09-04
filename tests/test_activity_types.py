@@ -44,6 +44,33 @@ async def test_get_activity_types_normalises_and_caches() -> None:
     request.assert_awaited_once()
 
 
+async def test_get_activities_learns_type_metadata_without_extra_request() -> None:
+    """Normal activity loading teaches the registry at zero extra API cost."""
+    client = _make_client()
+    activities = [
+        {
+            "activityId": 123,
+            "activityType": {
+                "typeId": 152,
+                "typeKey": "virtual_ride",
+                "parentTypeId": 2,
+            },
+        }
+    ]
+
+    with patch.object(
+        _BaseGarminClient, "get_activities", new_callable=AsyncMock
+    ) as base_get:
+        base_get.return_value = activities
+        result = await client.get_activities(0, 10)
+
+    assert result == activities
+    base_get.assert_awaited_once_with(0, 10)
+    assert client.activity_type_registry() == {
+        152: {"typeId": 152, "typeKey": "virtual_ride", "parentTypeId": 2}
+    }
+
+
 async def test_empty_refresh_keeps_previous_registry() -> None:
     """A transient empty Garmin response must not erase a good cache."""
     client = _make_client()
@@ -60,9 +87,7 @@ async def test_empty_refresh_keeps_previous_registry() -> None:
         request.return_value = []
         result = await client.get_activity_types(force_refresh=True)
 
-    assert result == [
-        {"typeId": 152, "typeKey": "virtual_ride", "parentTypeId": 2}
-    ]
+    assert result == [{"typeId": 152, "typeKey": "virtual_ride", "parentTypeId": 2}]
 
 
 async def test_fetch_activity_data_exposes_registry() -> None:
