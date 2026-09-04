@@ -1,4 +1,4 @@
-"""Tests for the dynamic Garmin activity type registry."""
+"""Tests for dynamic activity types and latest gear activity metadata."""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
@@ -11,6 +11,21 @@ def _make_client() -> GarminClient:
     auth = GarminAuth()
     auth.di_token = "fake_di_token"
     return GarminClient(auth)
+
+
+def _ride() -> dict[str, object]:
+    return {
+        "activityId": 123,
+        "activityName": "Morning ride",
+        "startTimeGMT": "2026-09-04T06:30:00.000",
+        "distance": 42318.0,
+        "duration": 6432.0,
+        "activityType": {
+            "typeId": 152,
+            "typeKey": "virtual_ride",
+            "parentTypeId": 2,
+        },
+    }
 
 
 async def test_get_activity_types_normalises_and_caches() -> None:
@@ -44,31 +59,61 @@ async def test_get_activity_types_normalises_and_caches() -> None:
     request.assert_awaited_once()
 
 
-async def test_get_activities_learns_type_metadata_without_extra_request() -> None:
-    """Normal activity loading teaches the registry at zero extra API cost."""
+async def test_activity_fetch_learns_type_and_maps_latest_gear_once() -> None:
+    """A new activity teaches its type and costs one cached gear lookup."""
     client = _make_client()
-    activities = [
-        {
-            "activityId": 123,
-            "activityType": {
-                "typeId": 152,
-                "typeKey": "virtual_ride",
-                "parentTypeId": 2,
-            },
-        }
-    ]
+    activities = [_ride()]
 
-    with patch.object(
-        _BaseGarminClient, "get_activities", new_callable=AsyncMock
-    ) as base_get:
+    with (
+        patch.object(
+            _BaseGarminClient, "get_activities", new_callable=AsyncMock
+        ) as base_get,
+        patch.object(client, "get_activity_gear", new_callable=AsyncMock) as gear_get,
+    ):
         base_get.return_value = activities
-        result = await client.get_activities(0, 10)
+        gear_get.return_value = [{"uuid": "gear-bike"}, {"uuid": "gear-shoes"}]
+        first = await client.get_activities(0, 10)
+        second = await client.get_activities(0, 10)
 
-    assert result == activities
-    base_get.assert_awaited_once_with(0, 10)
+    assert first == activities
+    assert second == activities
+    assert base_get.await_count == 2
+    gear_get.assert_awaited_once_with(123)
     assert client.activity_type_registry() == {
         152: {"typeId": 152, "typeKey": "virtual_ride", "parentTypeId": 2}
     }
+    expected = {
+        "activity_id": 123,
+        "name": "Morning ride",
+        "type": "virtual_ride",
+        "type_id": 152,
+        "parent_type_id": 2,
+        "start": "2026-09-04T06:30:00+00:00",
+        "distance_m": 42318.0,
+        "duration_s": 6432.0,
+    }
+    assert client._last_activity_by_gear["gear-bike"] == expected
+    assert client._last_activity_by_gear["gear-shoes"] == expected
+
+
+async def test_empty_activity_gear_is_retried_only_three_times() -> None:
+    """A newly uploaded activity gets bounded retries while Garmin catches up."""
+    client = _make_client()
+    activities = [_ride()]
+
+    with (
+        patch.object(
+            _BaseGarminClient, "get_activities", new_callable=AsyncMock
+        ) as base_get,
+        patch.object(client, "get_activity_gear", new_callable=AsyncMock) as gear_get,
+    ):
+        base_get.return_value = activities
+        gear_get.return_value = []
+        for _ in range(5):
+            await client.get_activities(0, 10)
+
+    assert gear_get.await_count == 3
+    assert client._last_activity_by_gear == {}
 
 
 async def test_empty_refresh_keeps_previous_registry() -> None:
@@ -115,8 +160,8 @@ async def test_fetch_activity_data_exposes_registry() -> None:
     ]
 
 
-async def test_fetch_gear_data_resolves_all_default_activity_ids() -> None:
-    """Gear defaults use Garmin's live hierarchy instead of type_XX fallbacks."""
+async def test_fetch_gear_data_resolves_defaults_and_last_activity() -> None:
+    """Gear data gets resolved default types and cached last activity."""
     client = _make_client()
     client._activity_type_registry = {
         25: {
@@ -136,6 +181,11 @@ async def test_fetch_gear_data_resolves_all_default_activity_ids() -> None:
         },
     }
     client._activity_type_registry_refreshed = datetime.now(UTC)
+    client._last_activity_by_gear["trainer"] = {
+        "activity_id": 123,
+        "name": "Morning ride",
+        "type": "virtual_ride",
+    }
 
     base_data = {
         "gearDefaults": [
@@ -168,8 +218,14 @@ async def test_fetch_gear_data_resolves_all_default_activity_ids() -> None:
         {"typeId": 25, "typeKey": "indoor_cycling", "parentTypeId": 2},
         {"typeId": 152, "typeKey": "virtual_ride", "parentTypeId": 2},
     ]
+    assert trainer["lastActivity"] == {
+        "activity_id": 123,
+        "name": "Morning ride",
+        "type": "virtual_ride",
+    }
     assert rower["defaultForActivity"] == ["indoor_rowing"]
     assert rower["defaultForActivityDetails"] == [
         {"typeId": 32, "typeKey": "indoor_rowing", "parentTypeId": 29}
     ]
+    assert "lastActivity" not in rower
     assert ignored["defaultForActivity"] == []
