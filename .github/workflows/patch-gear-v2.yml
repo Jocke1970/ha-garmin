@@ -1,0 +1,107 @@
+name: One-shot Garmin Gear v2 patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/patch-gear-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Apply Gear v2 patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old[:80]!r}")
+              path.write_text(text.replace(old, new, 1))
+
+          const = Path("src/ha_garmin/const.py")
+          replace_once(
+              const,
+              'GEAR_BASE_URL = f"{GARMIN_CONNECT_API}/gear-service/gear"\nGEAR_STATS_URL = f"{GARMIN_CONNECT_API}/gear-service/gear/stats"',
+              'GEAR_BASE_URL = f"{GARMIN_CONNECT_API}/gear-service/gear"\nGEAR_V2_URL = f"{GARMIN_CONNECT_API}/gear-service/gear/v2"\nGEAR_STATS_URL = f"{GARMIN_CONNECT_API}/gear-service/gear/stats"',
+          )
+
+          client = Path("src/ha_garmin/client.py")
+          replace_once(
+              client,
+              '    GEAR_STATS_URL,\n    GEAR_URL,',
+              '    GEAR_STATS_URL,\n    GEAR_URL,\n    GEAR_V2_URL,',
+          )
+
+          replace_once(
+              client,
+              '''    async def get_gear_stats(self, gear_uuid: str) -> dict[str, Any]:\n        """Get gear statistics."""\n        _validate_uuid(gear_uuid, "gear_uuid")\n        url = f"{GEAR_STATS_URL}/{gear_uuid}"\n        data = await self._request("GET", url)\n        return data if isinstance(data, dict) else {}\n\n''',
+              '''    async def get_gear_stats(self, gear_uuid: str) -> dict[str, Any]:\n        """Get legacy gear statistics."""\n        _validate_uuid(gear_uuid, "gear_uuid")\n        url = f"{GEAR_STATS_URL}/{gear_uuid}"\n        data = await self._request("GET", url)\n        return data if isinstance(data, dict) else {}\n\n    async def get_gear_details(self, gear_uuid: str) -> dict[str, Any]:\n        """Get Garmin Gear v2 details and usage statistics.\n\n        The v2 endpoint is used by the current Garmin Connect Gear editor and\n        exposes the selected usage metric (distance or duration), detailed gear\n        type, brand/model, days used, linked activities and activity associations.\n        """\n        _validate_uuid(gear_uuid, "gear_uuid")\n        url = f"{GEAR_V2_URL}/{gear_uuid}"\n        data = await self._request("GET", url)\n        return data if isinstance(data, dict) else {}\n\n''',
+          )
+
+          text = client.read_text()
+          start_marker = '''                    if gear_uuid:\n                        stats = await self._safe_call(self.get_gear_stats, gear_uuid)\n'''
+          end_marker = '''                            gear_stats.append(stats)\n'''
+          start = text.find(start_marker)
+          if start < 0:
+              raise SystemExit("client.py: Gear stats loop start marker not found")
+          end = text.find(end_marker, start)
+          if end < 0:
+              raise SystemExit("client.py: Gear stats loop end marker not found")
+          end += len(end_marker)
+          new_block = '''                    if gear_uuid:\n                        # Garmin Connect's current Gear editor uses v2. It exposes\n                        # the user-selected usage metric plus richer taxonomy. Use\n                        # it as the primary per-Gear read and fall back to the\n                        # legacy stats endpoint for older/unsupported accounts.\n                        stats = await self._safe_call(self.get_gear_details, gear_uuid)\n                        if stats:\n                            stats = dict(stats)\n                            stats["gearUuid"] = stats.get("uuid") or gear_uuid\n                            if stats.get("totalDistance") is None:\n                                stats["totalDistance"] = stats.get("distanceUsedMeters")\n                            if stats.get("totalActivities") is None:\n                                stats["totalActivities"] = stats.get("numActivitiesLinked")\n                            if stats.get("isProcessing") is None:\n                                stats["isProcessing"] = bool(stats.get("processing", False))\n                        else:\n                            stats = await self._safe_call(self.get_gear_stats, gear_uuid)\n\n                        if stats:\n                            # Keep the legacy aliases stable while also preserving\n                            # every Gear v2 field for richer HA consumers.\n                            stats["gearUuid"] = stats.get("gearUuid") or gear_uuid\n                            stats["gearName"] = (\n                                stats.get("name")\n                                or gear_item.get("displayName")\n                                or "Unknown"\n                            )\n                            stats["gearTypeName"] = gear_item.get(\n                                "gearTypeName", "Unknown"\n                            )\n                            stats["gearStatusName"] = gear_item.get(\n                                "gearStatusName", "active"\n                            )\n                            stats["gearMakeName"] = gear_item.get("gearMakeName")\n                            stats["gearModelName"] = gear_item.get("gearModelName")\n                            stats["customMakeModel"] = gear_item.get("customMakeModel")\n                            stats["dateBegin"] = gear_item.get("dateBegin")\n                            stats["dateEnd"] = gear_item.get("dateEnd")\n                            stats["maximumMeters"] = gear_item.get("maximumMeters")\n                            stats["defaultForActivity"] = gear_default_activities.get(\n                                gear_uuid, []\n                            )\n                            gear_stats.append(stats)\n'''
+          client.write_text(text[:start] + new_block + text[end:])
+
+          replace_once(
+              client,
+              '''        API calls: get_gear, get_gear_defaults, get_gear_stats×N,\n''',
+              '''        API calls: get_gear, get_gear_defaults, get_gear_details×N\n                   (legacy get_gear_stats fallback),\n''',
+          )
+
+          tests = Path("tests/test_client.py")
+          replace_once(
+              tests,
+              '''            ("get_gear_stats", ("../../../etc/passwd",)),\n''',
+              '''            ("get_gear_stats", ("../../../etc/passwd",)),\n            ("get_gear_details", ("../../../etc/passwd",)),\n''',
+          )
+
+          anchor = '''    async def test_uuid_path_accepts_valid_uuid(self):\n'''
+          insert = '''    async def test_get_gear_details_uses_v2_endpoint(self):\n        """Gear details use Garmin's current v2 Gear endpoint."""\n        auth = _make_auth()\n        client = GarminClient(auth)\n        gear_uuid = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"\n        payload = {\n            "uuid": gear_uuid,\n            "gearType": "BIKE_COMPONENT",\n            "brand": "Shimano",\n            "model": "CN-HG701",\n            "usageType": "DISTANCE",\n            "distanceUsedMeters": 1234.5,\n        }\n\n        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:\n            mock_request.return_value = payload\n            result = await client.get_gear_details(gear_uuid)\n\n        assert result == payload\n        assert mock_request.call_args[0][1].endswith(\n            f"/gear-service/gear/v2/{gear_uuid}"\n        )\n\n    async def test_fetch_gear_data_prefers_v2_usage_metadata(self):\n        """Gear fetch normalizes v2 usage while preserving rich metadata."""\n        auth = _make_auth()\n        client = GarminClient(auth)\n        profile = MagicMock(profile_id=12345)\n        gear_uuid = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"\n        gear = [{\n            "uuid": gear_uuid,\n            "displayName": "Headwind",\n            "gearTypeName": "Other",\n            "gearStatusName": "active",\n            "gearMakeName": "Other",\n            "gearModelName": "Other",\n            "customMakeModel": "Wahoo Headwind",\n            "dateBegin": "2018-01-01T00:00:00.0",\n            "dateEnd": None,\n            "maximumMeters": 0.0,\n        }]\n        details = {\n            "uuid": gear_uuid,\n            "gearType": "OTHER",\n            "name": "Headwind",\n            "brand": "Wahoo",\n            "model": "Headwind",\n            "usageType": "DURATION",\n            "maxUsageDurationSeconds": 0,\n            "numActivitiesLinked": 224,\n            "durationUsedSeconds": 489499,\n            "distanceUsedMeters": 3240848.9,\n            "daysUsed": 216,\n            "processing": False,\n            "associatedActivityTypes": [\n                {\n                    "activityTypeKey": "indoor_cycling",\n                    "defaultGear": True,\n                    "preferredGear": False,\n                }\n            ],\n        }\n\n        with (\n            patch.object(client, "get_user_profile", AsyncMock(return_value=profile)),\n            patch.object(client, "get_gear", AsyncMock(return_value=gear)),\n            patch.object(client, "get_gear_defaults", AsyncMock(return_value=[])),\n            patch.object(client, "get_gear_details", AsyncMock(return_value=details)),\n            patch.object(client, "get_gear_stats", AsyncMock()) as legacy_stats,\n            patch.object(client, "get_devices", AsyncMock(return_value=[])),\n            patch.object(client, "get_device_last_used", AsyncMock(return_value={})),\n            patch.object(client, "get_device_alarms", AsyncMock(return_value=[])),\n        ):\n            data = await client.fetch_gear_data()\n\n        legacy_stats.assert_not_awaited()\n        stat = data["gearStats"][0]\n        assert stat["usageType"] == "DURATION"\n        assert stat["durationUsedSeconds"] == 489499\n        assert stat["totalDistance"] == 3240848.9\n        assert stat["totalActivities"] == 224\n        assert stat["gearBrand"] if "gearBrand" in stat else stat["brand"] == "Wahoo"\n        assert stat["gearName"] == "Headwind"\n\n    async def test_fetch_gear_data_falls_back_to_legacy_stats(self):\n        """Legacy Gear stats remain available if Garmin v2 is unavailable."""\n        auth = _make_auth()\n        client = GarminClient(auth)\n        profile = MagicMock(profile_id=12345)\n        gear_uuid = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"\n        gear = [{"uuid": gear_uuid, "displayName": "Old Gear"}]\n        legacy = {"uuid": gear_uuid, "totalDistance": 42.0, "totalActivities": 3}\n\n        with (\n            patch.object(client, "get_user_profile", AsyncMock(return_value=profile)),\n            patch.object(client, "get_gear", AsyncMock(return_value=gear)),\n            patch.object(client, "get_gear_defaults", AsyncMock(return_value=[])),\n            patch.object(client, "get_gear_details", AsyncMock(return_value={})),\n            patch.object(client, "get_gear_stats", AsyncMock(return_value=legacy)) as legacy_stats,\n            patch.object(client, "get_devices", AsyncMock(return_value=[])),\n            patch.object(client, "get_device_last_used", AsyncMock(return_value={})),\n            patch.object(client, "get_device_alarms", AsyncMock(return_value=[])),\n        ):\n            data = await client.fetch_gear_data()\n\n        legacy_stats.assert_awaited_once_with(gear_uuid)\n        assert data["gearStats"][0]["totalDistance"] == 42.0\n        assert data["gearStats"][0]["totalActivities"] == 3\n\n'''
+          text = tests.read_text()
+          if text.count(anchor) != 1:
+              raise SystemExit("tests/test_client.py: UUID test anchor mismatch")
+          tests.write_text(text.replace(anchor, insert + anchor, 1))
+          PY
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Format, lint and test
+        run: |
+          ruff format src tests
+          ruff check src tests
+          mypy src
+          pytest tests/test_client.py -q
+
+      - name: Commit patch and remove one-shot workflow
+        run: |
+          rm .github/workflows/patch-gear-v2.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/ha_garmin/const.py src/ha_garmin/client.py tests/test_client.py .github/workflows/patch-gear-v2.yml
+          git commit -m "feat: add Garmin Gear v2 usage metadata"
+          git push
