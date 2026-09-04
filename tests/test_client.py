@@ -1322,6 +1322,7 @@ class TestGarminClient:
         "method,args",
         [
             ("get_gear_stats", ("../../../etc/passwd",)),
+            ("get_gear_details", ("../../../etc/passwd",)),
             ("set_active_gear", ("running", "set as default", "not-a-uuid")),
             ("add_gear_to_activity", ("bad-uuid", 12345)),
         ],
@@ -1333,6 +1334,119 @@ class TestGarminClient:
 
         with pytest.raises(ValueError, match="must be a valid UUID"):
             await getattr(client, method)(*args)
+
+    async def test_get_gear_details_uses_v2_endpoint(self):
+        """Gear details use Garmin's current v2 Gear endpoint."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+        gear_uuid = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+        payload = {
+            "uuid": gear_uuid,
+            "gearType": "BIKE_COMPONENT",
+            "brand": "Shimano",
+            "model": "CN-HG701",
+            "usageType": "DISTANCE",
+            "distanceUsedMeters": 1234.5,
+        }
+
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
+            mock_request.return_value = payload
+            result = await client.get_gear_details(gear_uuid)
+
+        assert result == payload
+        assert mock_request.call_args[0][1].endswith(
+            f"/gear-service/gear/v2/{gear_uuid}"
+        )
+
+    async def test_fetch_gear_data_prefers_v2_usage_metadata(self):
+        """Gear fetch normalizes v2 usage while preserving rich metadata."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+        profile = MagicMock(profile_id=12345)
+        gear_uuid = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+        gear = [
+            {
+                "uuid": gear_uuid,
+                "displayName": "Headwind",
+                "gearTypeName": "Other",
+                "gearStatusName": "active",
+                "gearMakeName": "Other",
+                "gearModelName": "Other",
+                "customMakeModel": "Wahoo Headwind",
+                "dateBegin": "2018-01-01T00:00:00.0",
+                "dateEnd": None,
+                "maximumMeters": 0.0,
+            }
+        ]
+        details = {
+            "uuid": gear_uuid,
+            "gearType": "OTHER",
+            "name": "Headwind",
+            "brand": "Wahoo",
+            "model": "Headwind",
+            "usageType": "DURATION",
+            "maxUsageDurationSeconds": 0,
+            "numActivitiesLinked": 224,
+            "durationUsedSeconds": 489499,
+            "distanceUsedMeters": 3240848.9,
+            "daysUsed": 216,
+            "processing": False,
+            "associatedActivityTypes": [
+                {
+                    "activityTypeKey": "indoor_cycling",
+                    "defaultGear": True,
+                    "preferredGear": False,
+                }
+            ],
+        }
+
+        with (
+            patch.object(client, "get_user_profile", AsyncMock(return_value=profile)),
+            patch.object(client, "get_gear", AsyncMock(return_value=gear)),
+            patch.object(client, "get_gear_defaults", AsyncMock(return_value=[])),
+            patch.object(client, "get_gear_details", AsyncMock(return_value=details)),
+            patch.object(client, "get_gear_stats", AsyncMock()) as legacy_stats,
+            patch.object(client, "get_devices", AsyncMock(return_value=[])),
+            patch.object(client, "get_device_last_used", AsyncMock(return_value={})),
+            patch.object(client, "get_device_alarms", AsyncMock(return_value=[])),
+        ):
+            data = await client.fetch_gear_data()
+
+        legacy_stats.assert_not_awaited()
+        stat = data["gearStats"][0]
+        assert stat["usageType"] == "DURATION"
+        assert stat["durationUsedSeconds"] == 489499
+        assert stat["totalDistance"] == 3240848.9
+        assert stat["totalActivities"] == 224
+        assert stat["gearBrand"] if "gearBrand" in stat else stat["brand"] == "Wahoo"
+        assert stat["gearName"] == "Headwind"
+
+    async def test_fetch_gear_data_falls_back_to_legacy_stats(self):
+        """Legacy Gear stats remain available if Garmin v2 is unavailable."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+        profile = MagicMock(profile_id=12345)
+        gear_uuid = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+        gear = [{"uuid": gear_uuid, "displayName": "Old Gear"}]
+        legacy = {"uuid": gear_uuid, "totalDistance": 42.0, "totalActivities": 3}
+
+        with (
+            patch.object(client, "get_user_profile", AsyncMock(return_value=profile)),
+            patch.object(client, "get_gear", AsyncMock(return_value=gear)),
+            patch.object(client, "get_gear_defaults", AsyncMock(return_value=[])),
+            patch.object(client, "get_gear_details", AsyncMock(return_value={})),
+            patch.object(
+                client, "get_gear_stats", AsyncMock(return_value=legacy)
+            ) as legacy_stats,
+            patch.object(client, "get_devices", AsyncMock(return_value=[])),
+            patch.object(client, "get_device_last_used", AsyncMock(return_value={})),
+            patch.object(client, "get_device_alarms", AsyncMock(return_value=[])),
+        ):
+            data = await client.fetch_gear_data()
+
+        legacy_stats.assert_awaited_once_with(gear_uuid)
+        assert data["gearStats"][0]["totalDistance"] == 42.0
+        assert data["gearStats"][0]["totalActivities"] == 3
 
     async def test_uuid_path_accepts_valid_uuid(self):
         """A well-formed UUID must be accepted for gear UUID path segments."""

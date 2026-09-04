@@ -32,6 +32,7 @@ from .const import (
     GEAR_LINK_URL,
     GEAR_STATS_URL,
     GEAR_URL,
+    GEAR_V2_URL,
     GOALS_URL,
     HILL_SCORE_URL,
     HRV_URL,
@@ -1355,9 +1356,21 @@ class GarminClient:
         return data if isinstance(data, list) else []
 
     async def get_gear_stats(self, gear_uuid: str) -> dict[str, Any]:
-        """Get gear statistics."""
+        """Get legacy gear statistics."""
         _validate_uuid(gear_uuid, "gear_uuid")
         url = f"{GEAR_STATS_URL}/{gear_uuid}"
+        data = await self._request("GET", url)
+        return data if isinstance(data, dict) else {}
+
+    async def get_gear_details(self, gear_uuid: str) -> dict[str, Any]:
+        """Get Garmin Gear v2 details and usage statistics.
+
+        The v2 endpoint is used by the current Garmin Connect Gear editor and
+        exposes the selected usage metric (distance or duration), detailed gear
+        type, brand/model, days used, linked activities and activity associations.
+        """
+        _validate_uuid(gear_uuid, "gear_uuid")
+        url = f"{GEAR_V2_URL}/{gear_uuid}"
         data = await self._request("GET", url)
         return data if isinstance(data, dict) else {}
 
@@ -2662,7 +2675,8 @@ class GarminClient:
     async def fetch_gear_data(self, timezone: str | None = None) -> dict[str, Any]:
         """Fetch gear data: gear, defaults, stats, alarms, solar, devices.
 
-        API calls: get_gear, get_gear_defaults, get_gear_stats×N,
+        API calls: get_gear, get_gear_defaults, get_gear_details×N
+                   (legacy get_gear_stats fallback),
                    get_devices, get_device_alarms, get_device_solar_data×N,
                    get_device_last_used
         """
@@ -2707,10 +2721,38 @@ class GarminClient:
                 for gear_item in gear:
                     gear_uuid = gear_item.get("uuid")
                     if gear_uuid:
-                        stats = await self._safe_call(self.get_gear_stats, gear_uuid)
+                        # Garmin Connect's current Gear editor uses v2. It exposes
+                        # the user-selected usage metric plus richer taxonomy. Use
+                        # it as the primary per-Gear read and fall back to the
+                        # legacy stats endpoint for older/unsupported accounts.
+                        stats = await self._safe_call(self.get_gear_details, gear_uuid)
                         if stats:
-                            stats["gearUuid"] = gear_uuid
-                            stats["gearName"] = gear_item.get("displayName", "Unknown")
+                            stats = dict(stats)
+                            stats["gearUuid"] = stats.get("uuid") or gear_uuid
+                            if stats.get("totalDistance") is None:
+                                stats["totalDistance"] = stats.get("distanceUsedMeters")
+                            if stats.get("totalActivities") is None:
+                                stats["totalActivities"] = stats.get(
+                                    "numActivitiesLinked"
+                                )
+                            if stats.get("isProcessing") is None:
+                                stats["isProcessing"] = bool(
+                                    stats.get("processing", False)
+                                )
+                        else:
+                            stats = await self._safe_call(
+                                self.get_gear_stats, gear_uuid
+                            )
+
+                        if stats:
+                            # Keep the legacy aliases stable while also preserving
+                            # every Gear v2 field for richer HA consumers.
+                            stats["gearUuid"] = stats.get("gearUuid") or gear_uuid
+                            stats["gearName"] = (
+                                stats.get("name")
+                                or gear_item.get("displayName")
+                                or "Unknown"
+                            )
                             stats["gearTypeName"] = gear_item.get(
                                 "gearTypeName", "Unknown"
                             )
