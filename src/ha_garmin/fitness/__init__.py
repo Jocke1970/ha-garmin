@@ -1,6 +1,6 @@
 """Garmin Fitness normalization and calculation primitives."""
 
-from .const import GARMIN_FITNESS_ALGORITHM_VERSION
+from .const import CANONICAL_LOAD_SOURCE, GARMIN_FITNESS_ALGORITHM_VERSION
 from .diagnostics import (
     ActivityTypeCoverage,
     LoadSourceCoverageComparison,
@@ -39,6 +39,7 @@ from .strain import (
 )
 from .training import compute_ctl_atl_tsb
 from .trimp import (
+    Sex,
     TrimpInputCoverage,
     analyze_trimp_input_coverage,
     build_daily_trimp_series,
@@ -46,6 +47,7 @@ from .trimp import (
 )
 
 __all__ = [
+    "CANONICAL_LOAD_SOURCE",
     "GARMIN_FITNESS_ALGORITHM_VERSION",
     "ActivityMetrics",
     "ActivityTypeCoverage",
@@ -58,6 +60,7 @@ __all__ = [
     "LoadSeriesAssessment",
     "LoadSourceCoverageComparison",
     "RampRatePoint",
+    "Sex",
     "TrainingHistoryExportRow",
     "TrainingHistoryResult",
     "TrainingLoadPoint",
