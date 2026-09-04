@@ -64,6 +64,8 @@ def compute_trimp(
         return None
     if user_max_hr <= resting_hr:
         raise ValueError("user_max_hr must be greater than resting_hr")
+    if sex not in ("male", "female"):
+        raise ValueError("sex must be male or female")
 
     hr_ratio = (activity.avg_hr - resting_hr) / (user_max_hr - resting_hr)
     hr_ratio = max(0.0, min(1.0, hr_ratio))
