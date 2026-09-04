@@ -1,0 +1,68 @@
+name: One-shot Gear v2 identity patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/patch-gear-v2-identity.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Preserve stable Gear UUID identity
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          client = Path("src/ha_garmin/client.py")
+          text = client.read_text()
+          old = '''                        if stats:\n                            stats = dict(stats)\n                            stats["gearUuid"] = stats.get("uuid") or gear_uuid\n                            if stats.get("totalDistance") is None:\n'''
+          new = '''                        if stats:\n                            stats = dict(stats)\n                            # Garmin v2 returns a canonical hyphenated UUID while\n                            # the long-lived Gear list uses the compact UUID that HA\n                            # already uses for entity unique_ids. Preserve that stable\n                            # identity and expose the v2 UUID separately.\n                            stats["v2Uuid"] = stats.get("uuid")\n                            stats["uuid"] = gear_uuid\n                            stats["gearUuid"] = gear_uuid\n                            if stats.get("totalDistance") is None:\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f"client identity block match count: {text.count(old)}")
+          client.write_text(text.replace(old, new, 1))
+
+          tests = Path("tests/test_client.py")
+          text = tests.read_text()
+          marker = '''        assert stat["usageType"] == "DURATION"\n'''
+          replacement = '''        assert stat["uuid"] == gear_uuid\n        assert stat["gearUuid"] == gear_uuid\n        assert stat["v2Uuid"] == gear_uuid\n        assert stat["usageType"] == "DURATION"\n'''
+          # The fixture currently returns the same UUID form; this still guards the\n          # stable identity keys. Add a dedicated canonical-response test too.\n          if text.count(marker) != 1:
+              raise SystemExit(f"v2 usage test marker match count: {text.count(marker)}")
+          text = text.replace(marker, replacement, 1)
+
+          anchor = '''    async def test_fetch_gear_data_falls_back_to_legacy_stats(self):\n'''
+          test = '''    async def test_fetch_gear_data_preserves_compact_uuid_from_gear_list(self):\n        """Canonical v2 UUID must not change HA Gear entity identity."""\n        auth = _make_auth()\n        client = GarminClient(auth)\n        profile = MagicMock(profile_id=12345)\n        compact_uuid = "afedeef9264e42609dd10073b30fcdc8"\n        canonical_uuid = "afedeef9-264e-4260-9dd1-0073b30fcdc8"\n        gear = [{\n            "uuid": compact_uuid,\n            "displayName": "Headwind",\n            "gearTypeName": "Other",\n            "gearStatusName": "active",\n        }]\n        details = {\n            "uuid": canonical_uuid,\n            "usageType": "DURATION",\n            "durationUsedSeconds": 3600,\n            "distanceUsedMeters": 1000.0,\n            "numActivitiesLinked": 1,\n        }\n\n        with (\n            patch.object(client, "get_user_profile", AsyncMock(return_value=profile)),\n            patch.object(client, "get_gear", AsyncMock(return_value=gear)),\n            patch.object(client, "get_gear_defaults", AsyncMock(return_value=[])),\n            patch.object(client, "get_gear_details", AsyncMock(return_value=details)),\n            patch.object(client, "get_devices", AsyncMock(return_value=[])),\n            patch.object(client, "get_device_last_used", AsyncMock(return_value={})),\n            patch.object(client, "get_device_alarms", AsyncMock(return_value=[])),\n        ):\n            data = await client.fetch_gear_data()\n\n        stat = data["gearStats"][0]\n        assert stat["uuid"] == compact_uuid\n        assert stat["gearUuid"] == compact_uuid\n        assert stat["v2Uuid"] == canonical_uuid\n\n'''
+          if text.count(anchor) != 1:
+              raise SystemExit(f"identity test anchor count: {text.count(anchor)}")
+          tests.write_text(text.replace(anchor, test + anchor, 1))
+          PY
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Format, lint and test
+        run: |
+          ruff format src tests
+          ruff check src tests
+          mypy src
+          pytest tests/test_client.py -q
+
+      - name: Commit patch and remove workflow
+        run: |
+          rm .github/workflows/patch-gear-v2-identity.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/ha_garmin/client.py tests/test_client.py .github/workflows/patch-gear-v2-identity.yml
+          git commit -m "fix: preserve stable Gear UUID identity with v2"
+          git push
