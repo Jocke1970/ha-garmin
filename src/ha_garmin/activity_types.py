@@ -6,9 +6,10 @@ loaded lazily as a cached bootstrap when gear data is fetched, so old/default
 activity types are resolved even when they have not appeared in recent
 activities.
 
-The Activity fetch flow also checks the newest activity for associated gear.
-That lookup is cached per activity, so it costs one extra API request when a
-new activity appears, not one request per gear or per coordinator poll.
+The Activity fetch flow also checks the recent activity window for associated
+gear. Results are cached per activity, so after the initial window is primed it
+costs one extra API request when a new activity appears, not one request per
+gear or per coordinator poll.
 """
 
 from __future__ import annotations
@@ -126,6 +127,26 @@ def _activity_summary(activity: dict[str, Any]) -> dict[str, Any] | None:
     return {key: value for key, value in summary.items() if value is not None}
 
 
+def _summary_is_newer(
+    candidate: dict[str, Any], existing: dict[str, Any] | None
+) -> bool:
+    """Return True when candidate is newer than the existing gear activity."""
+    if existing is None:
+        return True
+
+    candidate_start = candidate.get("start")
+    existing_start = existing.get("start")
+    if isinstance(candidate_start, str) and isinstance(existing_start, str):
+        return candidate_start > existing_start
+
+    candidate_id = candidate.get("activity_id")
+    existing_id = existing.get("activity_id")
+    if isinstance(candidate_id, int) and isinstance(existing_id, int):
+        return candidate_id > existing_id
+
+    return False
+
+
 class GarminClient(_BaseGarminClient):
     """Garmin client with cached activity types and latest gear activity."""
 
@@ -136,7 +157,9 @@ class GarminClient(_BaseGarminClient):
         self._activity_type_registry_refreshed: datetime | None = None
         self._activity_type_registry_lock = asyncio.Lock()
         self._recent_activities_raw: list[dict[str, Any]] = []
-        self._activity_gear_cache: tuple[int, list[dict[str, Any]], int] | None = None
+        self._activity_gear_cache: dict[
+            int, tuple[list[dict[str, Any]], int]
+        ] = {}
         self._last_activity_by_gear: dict[str, dict[str, Any]] = {}
 
     def activity_type_registry(self) -> dict[int, ActivityType]:
@@ -173,53 +196,81 @@ class GarminClient(_BaseGarminClient):
     async def _process_latest_activity_gear(
         self, activities: list[dict[str, Any]]
     ) -> None:
-        """Update last-activity metadata for gear used by the newest activity."""
+        """Update latest gear activity by scanning the recent activity window."""
         if not activities:
             return
 
-        latest = activities[0]
-        raw_activity_id = latest.get("activityId")
-        if raw_activity_id is None:
-            return
-        try:
-            activity_id = int(raw_activity_id)
-        except (TypeError, ValueError):
-            return
+        recent_ids: set[int] = set()
+        resolved_this_pass: set[str] = set()
 
-        empty_polls = 0
-        if self._activity_gear_cache is not None:
-            cached_id, cached_gear, cached_empty_polls = self._activity_gear_cache
-            if cached_id == activity_id:
-                if (
-                    cached_gear
-                    or cached_empty_polls >= _ACTIVITY_GEAR_EMPTY_RETRY_LIMIT
-                ):
-                    return
-                empty_polls = cached_empty_polls
-
-        try:
-            gear = await self.get_activity_gear(activity_id)
-        except GarminConnectError as err:
-            # Activity data is primary; a failed auxiliary gear lookup must not
-            # make the complete Activity coordinator unavailable.
-            _LOGGER.debug("Activity gear lookup failed for %s: %s", activity_id, err)
-            return
-
-        if not gear:
-            self._activity_gear_cache = (activity_id, [], empty_polls + 1)
-            return
-
-        self._activity_gear_cache = (activity_id, gear, 0)
-        summary = _activity_summary(latest)
-        if summary is None:
-            return
-
-        for gear_item in gear:
-            if not isinstance(gear_item, dict):
+        for index, activity in enumerate(activities):
+            raw_activity_id = activity.get("activityId")
+            if raw_activity_id is None:
                 continue
-            gear_uuid = gear_item.get("uuid") or gear_item.get("gearUuid")
-            if gear_uuid:
-                self._last_activity_by_gear[str(gear_uuid)] = dict(summary)
+            try:
+                activity_id = int(raw_activity_id)
+            except (TypeError, ValueError):
+                continue
+
+            recent_ids.add(activity_id)
+            cached = self._activity_gear_cache.get(activity_id)
+            gear: list[dict[str, Any]] | None = None
+            empty_polls = 0
+
+            if cached is not None:
+                cached_gear, cached_empty_polls = cached
+                empty_polls = cached_empty_polls
+                if cached_gear or cached_empty_polls >= _ACTIVITY_GEAR_EMPTY_RETRY_LIMIT:
+                    gear = cached_gear
+
+            if gear is None:
+                try:
+                    gear = await self.get_activity_gear(activity_id)
+                except GarminConnectError as err:
+                    # Activity data is primary; a failed auxiliary gear lookup must not
+                    # make the complete Activity coordinator unavailable.
+                    _LOGGER.debug(
+                        "Activity gear lookup failed for %s: %s", activity_id, err
+                    )
+                    continue
+
+                if not gear:
+                    # Only the newest activity gets propagation retries. Historical
+                    # activities with no gear are treated as stable after one lookup.
+                    polls = empty_polls + 1
+                    if index > 0:
+                        polls = _ACTIVITY_GEAR_EMPTY_RETRY_LIMIT
+                    self._activity_gear_cache[activity_id] = ([], polls)
+                    continue
+
+                self._activity_gear_cache[activity_id] = (gear, 0)
+
+            if not gear:
+                continue
+
+            summary = _activity_summary(activity)
+            if summary is None:
+                continue
+
+            for gear_item in gear:
+                if not isinstance(gear_item, dict):
+                    continue
+                gear_uuid = gear_item.get("uuid") or gear_item.get("gearUuid")
+                if not gear_uuid:
+                    continue
+                gear_key = str(gear_uuid)
+                if gear_key in resolved_this_pass:
+                    continue
+                if _summary_is_newer(summary, self._last_activity_by_gear.get(gear_key)):
+                    self._last_activity_by_gear[gear_key] = dict(summary)
+                resolved_this_pass.add(gear_key)
+
+        # Keep the per-activity cache bounded to the same rolling window we scan.
+        self._activity_gear_cache = {
+            activity_id: cached
+            for activity_id, cached in self._activity_gear_cache.items()
+            if activity_id in recent_ids
+        }
 
     async def get_activities(
         self, start: int = 0, limit: int = 10
