@@ -28,6 +28,21 @@ def _ride() -> dict[str, object]:
     }
 
 
+def _walk() -> dict[str, object]:
+    return {
+        "activityId": 122,
+        "activityName": "Stockholm Gång",
+        "startTimeGMT": "2026-08-12T07:59:00.000",
+        "distance": 2290.0,
+        "duration": 1493.0,
+        "activityType": {
+            "typeId": 9,
+            "typeKey": "walking",
+            "parentTypeId": 1,
+        },
+    }
+
+
 async def test_get_activity_types_normalises_and_caches() -> None:
     """The Garmin hierarchy is normalised and not fetched every poll."""
     client = _make_client()
@@ -112,6 +127,34 @@ async def test_activity_fetch_maps_latest_gear_once() -> None:
     assert client._last_activity_by_gear["gear-shoes"] == expected
 
 
+async def test_activity_fetch_scans_recent_window_for_each_gears_latest_use() -> None:
+    """Older recent activities backfill gear without overriding newer matches."""
+    client = _make_client()
+    client._recent_activities_raw = [_ride(), _walk()]
+
+    with (
+        patch.object(
+            _BaseGarminClient, "fetch_activity_data", new_callable=AsyncMock
+        ) as base_fetch,
+        patch.object(client, "get_activity_gear", new_callable=AsyncMock) as gear_get,
+    ):
+        base_fetch.return_value = {"lastActivity": {}, "lastActivities": []}
+        gear_get.side_effect = [
+            [{"uuid": "gear-rower"}],
+            [{"uuid": "gear-nike"}],
+        ]
+        await client.fetch_activity_data()
+        await client.fetch_activity_data()
+
+    assert gear_get.await_count == 2
+    assert client._last_activity_by_gear["gear-rower"]["activity_id"] == 123
+    nike = client._last_activity_by_gear["gear-nike"]
+    assert nike["activity_id"] == 122
+    assert nike["name"] == "Stockholm Gång"
+    assert nike["start"] == "2026-08-12T07:59:00+00:00"
+    assert nike["distance_m"] == 2290.0
+
+
 async def test_empty_activity_gear_is_retried_only_three_times() -> None:
     """A newly uploaded activity gets bounded retries while Garmin catches up."""
     client = _make_client()
@@ -130,6 +173,28 @@ async def test_empty_activity_gear_is_retried_only_three_times() -> None:
 
     assert gear_get.await_count == 3
     assert client._last_activity_by_gear == {}
+
+
+async def test_historical_empty_activity_is_not_retried() -> None:
+    """Empty historical activity gear is stable after the first lookup."""
+    client = _make_client()
+    client._recent_activities_raw = [_ride(), _walk()]
+
+    with (
+        patch.object(
+            _BaseGarminClient, "fetch_activity_data", new_callable=AsyncMock
+        ) as base_fetch,
+        patch.object(client, "get_activity_gear", new_callable=AsyncMock) as gear_get,
+    ):
+        base_fetch.return_value = {"lastActivity": {}, "lastActivities": []}
+        gear_get.return_value = []
+        await client.fetch_activity_data()
+        await client.fetch_activity_data()
+        await client.fetch_activity_data()
+
+    # Newest activity retries on each poll; the older historical activity is
+    # checked only once and then cached as a stable no-gear result.
+    assert gear_get.await_count == 4
 
 
 async def test_empty_refresh_keeps_previous_registry() -> None:
