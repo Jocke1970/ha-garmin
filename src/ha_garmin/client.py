@@ -1369,8 +1369,13 @@ class GarminClient:
         exposes the selected usage metric (distance or duration), detailed gear
         type, brand/model, days used, linked activities and activity associations.
         """
-        _validate_uuid(gear_uuid, "gear_uuid")
-        url = f"{GEAR_V2_URL}/{gear_uuid}"
+        validated_uuid = _validate_uuid(gear_uuid, "gear_uuid")
+        normalized_uuid = validated_uuid.replace("-", "")
+        canonical_uuid = (
+            f"{normalized_uuid[:8]}-{normalized_uuid[8:12]}-{normalized_uuid[12:16]}-"
+            f"{normalized_uuid[16:20]}-{normalized_uuid[20:]}"
+        )
+        url = f"{GEAR_V2_URL}/{canonical_uuid}"
         data = await self._request("GET", url)
         return data if isinstance(data, dict) else {}
 

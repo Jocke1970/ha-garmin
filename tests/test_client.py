@@ -1335,6 +1335,22 @@ class TestGarminClient:
         with pytest.raises(ValueError, match="must be a valid UUID"):
             await getattr(client, method)(*args)
 
+    async def test_get_gear_details_canonicalizes_compact_uuid(self):
+        """Garmin Gear v2 receives canonical hyphenated UUID paths."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+        compact_uuid = "afedeef9264e42609dd10073b30fcdc8"
+        canonical_uuid = "afedeef9-264e-4260-9dd1-0073b30fcdc8"
+
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
+            mock_request.return_value = {"uuid": canonical_uuid}
+            result = await client.get_gear_details(compact_uuid)
+
+        assert result["uuid"] == canonical_uuid
+        assert mock_request.call_args.args[1].endswith(
+            f"/gear-service/gear/v2/{canonical_uuid}"
+        )
+
     async def test_get_gear_details_uses_v2_endpoint(self):
         """Gear details use Garmin's current v2 Gear endpoint."""
         auth = _make_auth()
