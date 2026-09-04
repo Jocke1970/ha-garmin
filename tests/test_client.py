@@ -1437,6 +1437,45 @@ class TestGarminClient:
         assert stat["gearBrand"] if "gearBrand" in stat else stat["brand"] == "Wahoo"
         assert stat["gearName"] == "Headwind"
 
+    async def test_fetch_gear_data_preserves_compact_uuid_from_gear_list(self):
+        """Canonical v2 UUID must not change HA Gear entity identity."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+        profile = MagicMock(profile_id=12345)
+        compact_uuid = "afedeef9264e42609dd10073b30fcdc8"
+        canonical_uuid = "afedeef9-264e-4260-9dd1-0073b30fcdc8"
+        gear = [
+            {
+                "uuid": compact_uuid,
+                "displayName": "Headwind",
+                "gearTypeName": "Other",
+                "gearStatusName": "active",
+            }
+        ]
+        details = {
+            "uuid": canonical_uuid,
+            "usageType": "DURATION",
+            "durationUsedSeconds": 3600,
+            "distanceUsedMeters": 1000.0,
+            "numActivitiesLinked": 1,
+        }
+
+        with (
+            patch.object(client, "get_user_profile", AsyncMock(return_value=profile)),
+            patch.object(client, "get_gear", AsyncMock(return_value=gear)),
+            patch.object(client, "get_gear_defaults", AsyncMock(return_value=[])),
+            patch.object(client, "get_gear_details", AsyncMock(return_value=details)),
+            patch.object(client, "get_devices", AsyncMock(return_value=[])),
+            patch.object(client, "get_device_last_used", AsyncMock(return_value={})),
+            patch.object(client, "get_device_alarms", AsyncMock(return_value=[])),
+        ):
+            data = await client.fetch_gear_data()
+
+        stat = data["gearStats"][0]
+        assert stat["uuid"] == compact_uuid
+        assert stat["gearUuid"] == compact_uuid
+        assert stat["v2Uuid"] == canonical_uuid
+
     async def test_fetch_gear_data_falls_back_to_legacy_stats(self):
         """Legacy Gear stats remain available if Garmin v2 is unavailable."""
         auth = _make_auth()

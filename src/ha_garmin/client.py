@@ -2733,7 +2733,11 @@ class GarminClient:
                         stats = await self._safe_call(self.get_gear_details, gear_uuid)
                         if stats:
                             stats = dict(stats)
-                            stats["gearUuid"] = stats.get("uuid") or gear_uuid
+                            # Preserve the compact UUID used by long-lived HA entity IDs.
+                            # Garmin v2's canonical UUID remains available separately.
+                            stats["v2Uuid"] = stats.get("uuid")
+                            stats["uuid"] = gear_uuid
+                            stats["gearUuid"] = gear_uuid
                             if stats.get("totalDistance") is None:
                                 stats["totalDistance"] = stats.get("distanceUsedMeters")
                             if stats.get("totalActivities") is None:
