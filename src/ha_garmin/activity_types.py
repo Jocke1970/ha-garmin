@@ -1,9 +1,10 @@
 """Dynamic Garmin activity type registry and gear-default resolution.
 
-Garmin exposes the canonical activity type hierarchy at
-``/activity-service/activity/activityTypes``. The public ``GarminClient``
-subclass in this module loads that hierarchy lazily, caches it, and reuses it
-when activity and gear data are fetched.
+The registry learns activity types from the normal activity list response at
+no additional API cost. Garmin's canonical activity type hierarchy is also
+loaded lazily as a cached bootstrap when gear data is fetched, so old/default
+activity types are resolved even when they have not appeared in recent
+activities.
 
 Keeping Garmin's numeric IDs out of presentation code means newly introduced
 activity types can be understood automatically without maintaining a static
@@ -96,6 +97,24 @@ class GarminClient(_BaseGarminClient):
             for _, item in sorted(self._activity_type_registry.items())
         ]
 
+    def _learn_activity_types(self, activities: list[dict[str, Any]]) -> None:
+        """Merge type metadata already present in normal activity responses."""
+        for activity in activities:
+            raw_type = activity.get("activityType")
+            if not isinstance(raw_type, dict):
+                continue
+            item = _normalise_activity_type(raw_type)
+            if item is not None:
+                self._activity_type_registry[item["typeId"]] = item
+
+    async def get_activities(
+        self, start: int = 0, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        """Fetch activities and learn their Garmin activity type metadata."""
+        activities = await super().get_activities(start, limit)
+        self._learn_activity_types(activities)
+        return activities
+
     async def get_activity_types(
         self, *, force_refresh: bool = False
     ) -> list[ActivityType]:
@@ -108,7 +127,6 @@ class GarminClient(_BaseGarminClient):
         now = datetime.now(UTC)
         if (
             not force_refresh
-            and self._activity_type_registry
             and self._activity_type_registry_refreshed is not None
             and now - self._activity_type_registry_refreshed < _ACTIVITY_TYPES_CACHE_TTL
         ):
@@ -118,10 +136,8 @@ class GarminClient(_BaseGarminClient):
             now = datetime.now(UTC)
             if (
                 not force_refresh
-                and self._activity_type_registry
                 and self._activity_type_registry_refreshed is not None
-                and now - self._activity_type_registry_refreshed
-                < _ACTIVITY_TYPES_CACHE_TTL
+                and now - self._activity_type_registry_refreshed < _ACTIVITY_TYPES_CACHE_TTL
             ):
                 return self._activity_types_as_list()
 
@@ -141,9 +157,10 @@ class GarminClient(_BaseGarminClient):
                     if item is not None:
                         registry[item["typeId"]] = item
 
-            # A transient empty response must not wipe a previously good cache.
+            # A transient empty response must not wipe types learned from
+            # normal activity data or a previous successful hierarchy fetch.
             if registry:
-                self._activity_type_registry = registry
+                self._activity_type_registry.update(registry)
                 self._activity_type_registry_refreshed = now
 
             return self._activity_types_as_list()
@@ -170,10 +187,9 @@ class GarminClient(_BaseGarminClient):
     async def fetch_activity_data(
         self, target_date: date | None = None
     ) -> dict[str, Any]:
-        """Fetch activity data and attach the current activity type registry."""
-        activity_types = await self._get_activity_types_best_effort()
+        """Fetch activity data and expose types learned during that fetch."""
         data = await super().fetch_activity_data(target_date)
-        data["activityTypes"] = activity_types
+        data["activityTypes"] = self._activity_types_as_list()
         return data
 
     async def fetch_gear_data(self, timezone: str | None = None) -> dict[str, Any]:
