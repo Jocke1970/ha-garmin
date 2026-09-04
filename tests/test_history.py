@@ -236,3 +236,62 @@ class TestGarminHistoryClient:
         assert metrics[0].duration_minutes == 20.0
         assert metrics[1].duration_minutes == 30.0
         assert metrics[1].garmin_training_load == 4.0
+
+    async def test_fetch_trimp_history_enriches_sparse_activity_summary(self):
+        """Sparse list activities use Garmin summary data before TRIMP is blocked."""
+        client = _make_client()
+        history = GarminHistoryClient(client)
+        target = date(2026, 9, 3)
+        raw = [
+            {
+                "activityId": 7,
+                "calendarDate": "2026-09-03",
+                "startTimeGMT": "2026-09-03T16:00:00",
+                "startTimeLocal": "2026-09-03T18:00:00",
+                "activityType": {"typeKey": "walking"},
+                "duration": 1200,
+                "averageHR": None,
+            }
+        ]
+
+        with (
+            patch.object(
+                history,
+                "get_activities_by_date",
+                new_callable=AsyncMock,
+                return_value=raw,
+            ),
+            patch.object(
+                client,
+                "get_activity",
+                new_callable=AsyncMock,
+                return_value={
+                    "summaryDTO": {
+                        "averageHR": 123,
+                        "maxHR": 141,
+                        "duration": 1200,
+                    }
+                },
+            ) as mock_activity,
+            patch.object(
+                history,
+                "get_resting_heart_rate_range",
+                new_callable=AsyncMock,
+                return_value={target: 55.0},
+            ),
+        ):
+            result = await history.fetch_trimp_training_history(
+                target,
+                target,
+                user_max_hr=175,
+                sex="male",
+            )
+
+        mock_activity.assert_awaited_once_with(7)
+        assert result.source == "trimp"
+        assert result.assessment.ready is True
+        assert result.assessment.incomplete_days == ()
+        assert len(result.daily_loads) == 1
+        assert result.daily_loads[0].load is not None
+        assert result.daily_loads[0].load > 0
+        assert len(result.training_points) == 1
