@@ -18,7 +18,13 @@ from .const import (
     USER_STATS_DAILY_URL,
 )
 from .exceptions import GarminAPIError
-from .fitness import ActivityMetrics, normalize_activities
+from .fitness import (
+    ActivityMetrics,
+    Sex,
+    TrainingHistoryResult,
+    build_trimp_training_history,
+    normalize_activities,
+)
 
 if TYPE_CHECKING:
     from .client import GarminClient
@@ -180,3 +186,36 @@ class GarminHistoryClient:
             sort_order=sort_order,
         )
         return normalize_activities(raw)
+
+    async def fetch_trimp_training_history(
+        self,
+        start_date: date,
+        end_date: date,
+        *,
+        user_max_hr: float,
+        sex: Sex,
+    ) -> TrainingHistoryResult:
+        """Fetch strict Garmin history and derive the canonical TRIMP series.
+
+        This facade deliberately reuses the wrapped authenticated client and
+        performs only date-bound historical requests. It is the intended handoff
+        point for Home Assistant coordinators once this library version is
+        released: the integration should not duplicate Fitness formulas.
+        """
+        if start_date > end_date:
+            raise ValueError("start_date cannot be after end_date")
+        if user_max_hr <= 0:
+            raise ValueError("user_max_hr must be positive")
+        if sex not in ("male", "female"):
+            raise ValueError("sex must be male or female")
+
+        activities = await self.fetch_activity_metrics(start_date, end_date)
+        resting_hr = await self.get_resting_heart_rate_range(start_date, end_date)
+        return build_trimp_training_history(
+            activities,
+            start_date,
+            end_date,
+            resting_hr,
+            user_max_hr,
+            sex,
+        )
