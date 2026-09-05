@@ -10,8 +10,10 @@ from .diagnostics import (
 )
 from .export import TrainingHistoryExportRow, export_training_history_rows
 from .focus import (
+    DailyLoadFocus,
     LoadFocus,
     LoadFocusSummary,
+    build_daily_load_focus_series,
     classify_activity_focus,
     classify_load_focus,
 )
@@ -53,6 +55,7 @@ __all__ = [
     "ActivityTypeCoverage",
     "AcwrPoint",
     "DailyLoad",
+    "DailyLoadFocus",
     "GarminLoadCoverage",
     "GarminTrainingHistory",
     "LoadFocus",
@@ -71,6 +74,7 @@ __all__ = [
     "analyze_trimp_input_coverage",
     "assess_daily_load_series",
     "build_daily_garmin_load_series",
+    "build_daily_load_focus_series",
     "build_daily_trimp_series",
     "build_garmin_training_history",
     "build_training_history_from_daily_loads",
