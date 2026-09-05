@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
+
+from ..fitness.models import ActivityMetrics
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,3 +52,58 @@ class DailyRecoveryMetrics:
     hrv_available: bool = False
     readiness_available: bool = False
     morning_readiness_available: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingSnapshot:
+    """Exact-date canonical Training V4 values used by Insight rules."""
+
+    date: date
+    source: str
+    algorithm_version: int
+    ready: bool
+    daily_load: float | None = None
+    ctl: float | None = None
+    atl: float | None = None
+    tsb: float | None = None
+    acwr: float | None = None
+    ramp_rate: float | None = None
+    strain: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LoadFocusSnapshot:
+    """Exact-date Training Effect bucket coverage for Insight rules."""
+
+    date: date
+    activity_count: int
+    covered_activities: int
+    complete: bool
+    low_aerobic: float | None = None
+    high_aerobic: float | None = None
+    anaerobic: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InsightDataQuality:
+    """Explain whether a snapshot can safely support deterministic rules."""
+
+    complete: bool
+    recovery_current: bool
+    training_complete: bool
+    load_focus_complete: bool
+    missing_sources: tuple[str, ...] = ()
+    missing_fields: tuple[str, ...] = ()
+    stale_fields: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class InsightSnapshot:
+    """One immutable, presentation-independent input bundle for Insight rules."""
+
+    as_of: datetime
+    recovery: DailyRecoveryMetrics
+    training: TrainingSnapshot
+    load_focus: LoadFocusSnapshot
+    recent_activities: tuple[ActivityMetrics, ...]
+    data_quality: InsightDataQuality
