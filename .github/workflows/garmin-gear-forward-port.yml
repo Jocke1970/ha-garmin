@@ -1,4 +1,4 @@
-name: Garmin Gear forward-port
+name: Garmin Gear M1 source models
 
 on:
   push:
@@ -10,80 +10,527 @@ permissions:
   contents: write
 
 jobs:
-  forward-port:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           ref: feature/garmin-gear
-          fetch-depth: 0
 
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
-      - name: Forward-port proven Gear changes only
-        shell: bash
+      - name: Add M1 Gear source models
         run: |
-          set -euo pipefail
-          git fetch origin main feature/preserve-activity-device-id
+          python - <<'PY'
+          from pathlib import Path
 
-          apply_commit_files() {
-            local commit="$1"
-            shift
-            echo "Applying $commit: $*"
-            git show --format= "$commit" -- "$@" | git apply --3way
-          }
+          gear_module = '''"""Reusable Garmin Gear source records and canonical item model.
 
-          # Dynamic activity-type registry and recent Gear activity tracking.
-          apply_commit_files f16c79662d3621270cec223a8b918a70a1ddcd25 src/ha_garmin/activity_types.py
-          apply_commit_files 3f62d1d57de7f0dd61972dad0743b75592e7ed0a src/ha_garmin/__init__.py tests/test_activity_types.py
-          apply_commit_files 6cf3411c19bca746676db527151773ed55abf5ad src/ha_garmin/activity_types.py
-          apply_commit_files c306082f632ddf5be67653de6ea91b95b8243001 tests/test_activity_types.py
-          apply_commit_files a1db083436cbcdb64a733017cbbbef18da3aab95 src/ha_garmin/activity_types.py tests/test_activity_types.py
-          apply_commit_files 281aff48030b64f4c780ea27caebbd8c12768c04 src/ha_garmin/activity_types.py tests/test_activity_types.py
-          apply_commit_files d110076ca21e2abe85a0bda6e647ac80a141b87c tests/test_activity_types.py
-          apply_commit_files 6758db7768bd0285952c0a5e5bddf450b7350889 src/ha_garmin/activity_types.py tests/test_activity_types.py
-          apply_commit_files 05c6781b35ab1d986c6276382356a4c5292c5332 src/ha_garmin/activity_types.py
-          apply_commit_files 9939c760b142c13b84a0458b57c9aadb2705ac38 tests/test_activity_types.py
-          apply_commit_files 0fc50ab6c42a674c0f6c894aee19dcc5ad3ccf87 src/ha_garmin/activity_types.py
-          apply_commit_files 04155365057465ef8754bbc527e5cf31de028f9a src/ha_garmin/activity_types.py
-          apply_commit_files 997fa7f600652bbc0c452b421eaffb5f4ba54203 tests/test_activity_types.py
-          apply_commit_files 32f12df3095c84102fdaef01a7ec539ed34db6e1 src/ha_garmin/activity_types.py
-          apply_commit_files c84b0a1498e8e6bc7623447e66b769f9b0feb643 tests/test_activity_types.py
-          apply_commit_files 0a147956f52c32ac5e2bff24d033ecfceb890393 src/ha_garmin/activity_types.py tests/test_activity_types.py
+This module intentionally keeps Garmin source identities separate. A physical
+item may later be linked to more than one source record, but records are never
+merged by display name.
+"""
 
-          # Gear v2 usage/identity. Deliberately exclude temporary workflow files.
-          apply_commit_files 62fa3e06436c6059082c28a168e7008cb5fdd99c src/ha_garmin/const.py src/ha_garmin/client.py tests/test_client.py
-          apply_commit_files 92eea139aa2cdad86625e14886c7cb16dd199114 src/ha_garmin/client.py tests/test_client.py
-          apply_commit_files c88e9c962edfb8b8ca71652297898c11dc44a639 src/ha_garmin/client.py tests/test_client.py
+from __future__ import annotations
 
-          # Preserve activity -> recording device identity.
-          apply_commit_files 3640e8ff0e9b46f14f496734983bff1d6ade5c2b src/ha_garmin/client.py tests/test_client.py
+import hashlib
+import re
+from datetime import UTC, datetime
+from typing import Any
 
-          # Recent ANT+/BLE sensor battery data in normal Gear polling.
-          apply_commit_files a66423deb273a899a5c7582fea1253151fc68798 src/ha_garmin/client.py tests/test_client.py
+from pydantic import Field, field_validator, model_validator
+
+from .models import GarminModel
+
+_CATEGORY_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
+
+
+def _clean_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"other", "unknown", "unknown bike", "unknown shoes"}:
+        return None
+    return text
+
+
+def _as_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _first_present(data: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in data and data[key] is not None:
+            return data[key]
+    return None
+
+
+def _private_hash(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def _sensor_identity(sensor: dict[str, Any]) -> tuple[str, str]:
+    serial = sensor.get("serialNumber")
+    if serial not in (None, ""):
+        return f"serial:{serial}", "strong"
+
+    parts = [
+        str(sensor.get(key) or "")
+        for key in ("sensorType", "productId", "partNumber", "deviceName", "manufacturer")
+    ]
+    basis = "|".join(parts)
+    return basis, "weak"
+
+
+def _status_active(value: Any) -> bool | None:
+    status = str(value or "").strip().lower()
+    if status in {"active", "enabled"}:
+        return True
+    if status in {"retired", "inactive", "disabled"}:
+        return False
+    return None
+
+
+def _validate_category(category: str) -> str:
+    if not _CATEGORY_RE.fullmatch(category):
+        raise ValueError("Gear categories must use lowercase snake_case")
+    return category
+
+
+class GearSourceRecord(GarminModel):
+    """One normalized record from one Garmin identity domain."""
+
+    source: str
+    source_id: str
+    name: str | None = None
+    manufacturer: str | None = None
+    model: str | None = None
+    garmin_ids: dict[str, str | int] = Field(default_factory=dict)
+    active: bool | None = None
+    last_used_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    activity_count: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class GearItem(GarminModel):
+    """Canonical Gear item prepared for one or more source records."""
+
+    id: str
+    name: str
+    manufacturer: str | None = None
+    model: str | None = None
+    garmin_ids: dict[str, str | int] = Field(default_factory=dict)
+    categories: list[str] = Field(default_factory=list)
+    primary_category: str | None = None
+    sources: list[GearSourceRecord] = Field(default_factory=list)
+    active: bool | None = None
+    last_used_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    activity_count: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("categories")
+    @classmethod
+    def validate_categories(cls, categories: list[str]) -> list[str]:
+        result: list[str] = []
+        for raw in categories:
+            category = _validate_category(raw)
+            if category not in result:
+                result.append(category)
+        return result
+
+    @field_validator("primary_category")
+    @classmethod
+    def validate_primary_category_format(cls, value: str | None) -> str | None:
+        return _validate_category(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def validate_primary_membership(self) -> "GearItem":
+        if self.primary_category is not None and self.primary_category not in self.categories:
+            raise ValueError("primary_category must be present in categories")
+        return self
+
+
+def _gear_display(stat: dict[str, Any]) -> tuple[str, str | None, str | None]:
+    brand = _clean_text(stat.get("brand") or stat.get("gearMakeName"))
+    model = _clean_text(stat.get("model") or stat.get("gearModelName"))
+    structured = " ".join(part for part in (brand, model) if part)
+    fallback = (
+        _clean_text(stat.get("customMakeModel"))
+        or _clean_text(stat.get("gearName"))
+        or _clean_text(stat.get("name"))
+        or "Garmin Gear"
+    )
+    return structured or fallback, brand, model
+
+
+def _gear_source(stat: dict[str, Any]) -> GearSourceRecord | None:
+    gear_uuid = _first_present(stat, "uuid", "gearUuid")
+    if not gear_uuid:
+        return None
+
+    name, brand, model = _gear_display(stat)
+    garmin_ids: dict[str, str | int] = {"gear_uuid": str(gear_uuid)}
+    if stat.get("v2Uuid"):
+        garmin_ids["gear_v2_uuid"] = str(stat["v2Uuid"])
+    if stat.get("gearPk") is not None:
+        garmin_ids["gear_pk"] = int(stat["gearPk"])
+
+    last_activity = stat.get("lastActivity") if isinstance(stat.get("lastActivity"), dict) else {}
+    activity_count = _first_present(stat, "numActivitiesLinked", "totalActivities")
+    if isinstance(activity_count, bool) or not isinstance(activity_count, int | float):
+        activity_count = None
+    elif isinstance(activity_count, float) and not activity_count.is_integer():
+        activity_count = None
+    else:
+        activity_count = int(activity_count)
+
+    metadata = {
+        "gear_type": _first_present(stat, "gearType", "gearTypeName"),
+        "usage_type": stat.get("usageType"),
+        "first_use_date": _first_present(stat, "firstUseDate", "dateBegin"),
+        "days_used": stat.get("daysUsed"),
+        "distance_used_m": _first_present(stat, "distanceUsedMeters", "totalDistance"),
+        "duration_used_s": stat.get("durationUsedSeconds"),
+        "max_distance_m": stat.get("maximumMeters"),
+        "max_duration_s": stat.get("maxUsageDurationSeconds"),
+        "associated_activity_types": stat.get("associatedActivityTypes"),
+        "default_for_activity": stat.get("defaultForActivity"),
+        "last_activity": last_activity or None,
+    }
+    metadata = {key: value for key, value in metadata.items() if value is not None}
+
+    return GearSourceRecord(
+        source="garmin_gear",
+        source_id=f"garmin_gear:{gear_uuid}",
+        name=name,
+        manufacturer=brand,
+        model=model,
+        garmin_ids=garmin_ids,
+        active=_status_active(_first_present(stat, "status", "gearStatusName")),
+        last_used_at=_as_datetime(last_activity.get("start")),
+        last_seen_at=None,
+        activity_count=activity_count,
+        metadata=metadata,
+    )
+
+
+def _device_activity_last_used(
+    device_id: Any, recent_activities: list[dict[str, Any]]
+) -> datetime | None:
+    if device_id is None:
+        return None
+    matches: list[datetime] = []
+    for activity in recent_activities:
+        if activity.get("deviceId") != device_id:
+            continue
+        started = _as_datetime(_first_present(activity, "startTimeGMT", "startTime"))
+        if started is not None:
+            matches.append(started)
+    return max(matches, default=None)
+
+
+def _device_source(
+    device: dict[str, Any],
+    recent_activities: list[dict[str, Any]],
+    last_used_device: dict[str, Any],
+) -> GearSourceRecord | None:
+    device_id = device.get("deviceId")
+    unit_id = device.get("unitId")
+    source_basis = device_id if device_id is not None else unit_id
+    if source_basis is None:
+        return None
+
+    garmin_ids: dict[str, str | int] = {}
+    for target, source in (
+        ("device_id", "deviceId"),
+        ("unit_id", "unitId"),
+        ("application_key", "applicationKey"),
+        ("product_sku", "productSku"),
+        ("part_number", "partNumber"),
+    ):
+        value = device.get(source)
+        if isinstance(value, str | int) and not isinstance(value, bool) and value != "":
+            garmin_ids[target] = value
+    serial_hash = _private_hash(device.get("serialNumber"))
+    if serial_hash:
+        garmin_ids["serial_hash"] = serial_hash
+
+    last_seen_at = None
+    if device_id is not None and last_used_device.get("deviceId") == device_id:
+        last_seen_at = _as_datetime(
+            _first_present(last_used_device, "lastSyncTime", "lastSyncTimeGMT")
+        )
+
+    metadata = {
+        "device_type_pk": device.get("deviceTypePk"),
+        "device_type_name": device.get("deviceTypeName"),
+        "device_categories": device.get("deviceCategories"),
+        "firmware": device.get("currentFirmwareVersion"),
+        "primary": device.get("primary"),
+        "primary_activity_tracker": device.get("primaryActivityTrackerIndicator"),
+        "image_url": device.get("imageUrl"),
+    }
+    metadata = {key: value for key, value in metadata.items() if value is not None}
+
+    name = _clean_text(device.get("productDisplayName") or device.get("displayName")) or "Garmin device"
+    model = _clean_text(device.get("productDisplayName") or device.get("displayName"))
+
+    return GearSourceRecord(
+        source="garmin_device",
+        source_id=f"garmin_device:{source_basis}",
+        name=name,
+        manufacturer="Garmin",
+        model=model,
+        garmin_ids=garmin_ids,
+        active=_status_active(device.get("deviceStatus")),
+        last_used_at=_device_activity_last_used(device_id, recent_activities),
+        last_seen_at=last_seen_at,
+        activity_count=None,
+        metadata=metadata,
+    )
+
+
+def _sensor_source(sensor: dict[str, Any]) -> GearSourceRecord | None:
+    identity_basis, identity_strength = _sensor_identity(sensor)
+    if not identity_basis:
+        return None
+    identity_hash = hashlib.sha256(identity_basis.encode()).hexdigest()[:16]
+
+    garmin_ids: dict[str, str | int] = {"sensor_identity_hash": identity_hash}
+    for target, source in (("product_id", "productId"), ("part_number", "partNumber")):
+        value = sensor.get(source)
+        if isinstance(value, str | int) and not isinstance(value, bool) and value != "":
+            garmin_ids[target] = value
+
+    serial_hash = _private_hash(sensor.get("serialNumber"))
+    if serial_hash:
+        garmin_ids["serial_hash"] = serial_hash
+
+    sensor_type = str(sensor.get("sensorType") or "unknown").lower()
+    name = _clean_text(sensor.get("deviceName")) or sensor_type.replace("_", " ").title()
+    metadata = {
+        "sensor_type": sensor.get("sensorType"),
+        "battery_level": sensor.get("batteryLevel"),
+        "battery_status": sensor.get("batteryStatus"),
+        "last_low_battery_notification": sensor.get("lastLowBatteryNotification"),
+        "rechargeable_sensor_capable": sensor.get("rechargeableSensorCapable"),
+        "software_version": sensor.get("softwareVersion"),
+        "image_url": sensor.get("imageUrl"),
+        "identity_strength": identity_strength,
+    }
+    metadata = {key: value for key, value in metadata.items() if value is not None}
+
+    return GearSourceRecord(
+        source="garmin_sensor",
+        source_id=f"garmin_sensor:{identity_hash}",
+        name=name,
+        manufacturer=_clean_text(sensor.get("manufacturer")),
+        model=_clean_text(sensor.get("partNumber")),
+        garmin_ids=garmin_ids,
+        active=None,
+        last_used_at=None,
+        last_seen_at=_as_datetime(sensor.get("lastConnected")),
+        activity_count=None,
+        metadata=metadata,
+    )
+
+
+def build_gear_source_records(
+    data: dict[str, Any], recent_activities: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """Build normalized source records without cross-source name matching."""
+    recent = recent_activities or []
+    last_used_device = data.get("lastUsedDevice")
+    if not isinstance(last_used_device, dict):
+        last_used_device = {}
+
+    records: list[GearSourceRecord] = []
+    for stat in data.get("gearStats") or []:
+        if isinstance(stat, dict) and (record := _gear_source(stat)) is not None:
+            records.append(record)
+    for device in data.get("devices") or []:
+        if isinstance(device, dict) and (
+            record := _device_source(device, recent, last_used_device)
+        ) is not None:
+            records.append(record)
+    for sensor in data.get("sensors") or []:
+        if isinstance(sensor, dict) and (record := _sensor_source(sensor)) is not None:
+            records.append(record)
+
+    return [record.model_dump(mode="python") for record in records]
+'''
+
+          tests = '''"""Tests for Garmin Gear M1 source models."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import pytest
+from pydantic import ValidationError
+
+from ha_garmin.gear import GearItem, GearSourceRecord, build_gear_source_records
+
+
+def test_gear_item_supports_multiple_sources_and_nullable_activity_count() -> None:
+    sources = [
+        GearSourceRecord(source="garmin_gear", source_id="garmin_gear:abc"),
+        GearSourceRecord(source="garmin_device", source_id="garmin_device:123"),
+    ]
+    item = GearItem(
+        id="garmin_gear:abc",
+        name="Example",
+        categories=["cycling", "wearables"],
+        primary_category="cycling",
+        sources=sources,
+        activity_count=None,
+    )
+
+    assert len(item.sources) == 2
+    assert item.activity_count is None
+    assert "device_id" not in item.model_fields
+
+
+def test_categories_require_lowercase_snake_case() -> None:
+    with pytest.raises(ValidationError):
+        GearItem(id="x", name="Bad", categories=["Winter Sport"])
+
+    with pytest.raises(ValidationError):
+        GearItem(
+            id="x",
+            name="Bad primary",
+            categories=["cycling"],
+            primary_category="running",
+        )
+
+
+def test_source_identity_does_not_depend_on_display_name() -> None:
+    first = {
+        "uuid": "abc123",
+        "brand": "Bontrager",
+        "model": "Ion 200 RT Flare",
+        "status": "ACTIVE",
+        "numActivitiesLinked": 0,
+    }
+    renamed = dict(first, brand="Trek", model="CarBack Radar")
+
+    first_record = build_gear_source_records({"gearStats": [first]})[0]
+    second_record = build_gear_source_records({"gearStats": [renamed]})[0]
+
+    assert first_record["source_id"] == second_record["source_id"] == "garmin_gear:abc123"
+
+
+def test_device_last_used_requires_exact_device_id_and_count_stays_unknown() -> None:
+    activity = {
+        "activityId": 1,
+        "deviceId": 123,
+        "startTimeGMT": "2026-09-05T10:00:00+00:00",
+    }
+    data = {
+        "devices": [{"deviceId": 123, "productDisplayName": "Edge 1040"}],
+        "lastUsedDevice": {"deviceId": 999, "lastSyncTime": "2026-09-05T11:00:00+00:00"},
+    }
+
+    record = build_gear_source_records(data, [activity])[0]
+
+    assert record["last_used_at"] == datetime(2026, 9, 5, 10, 0, tzinfo=UTC)
+    assert record["last_seen_at"] is None
+    assert record["activity_count"] is None
+
+
+def test_sensor_serial_is_hashed_and_last_connected_is_last_seen_only() -> None:
+    sensor = {
+        "serialNumber": "SECRET-SERIAL",
+        "sensorType": "HEART_RATE",
+        "batteryLevel": 75,
+        "lastConnected": "2026-09-05T12:00:00+00:00",
+    }
+
+    record = build_gear_source_records({"sensors": [sensor]})[0]
+
+    assert "SECRET-SERIAL" not in str(record)
+    assert record["last_used_at"] is None
+    assert record["last_seen_at"] == datetime(2026, 9, 5, 12, 0, tzinfo=UTC)
+    assert record["activity_count"] is None
+'''
+
+          Path("src/ha_garmin/gear.py").write_text(gear_module)
+          Path("tests/test_gear.py").write_text(tests)
+
+          client = Path("src/ha_garmin/client.py")
+          text = client.read_text()
+          old = '''    "deviceCategories",\n    "wifi",\n}'''
+          new = '''    "deviceCategories",\n    "deviceTypePk",\n    "deviceTypeName",\n    "deviceStatus",\n    "currentFirmwareVersion",\n    "actualProductSku",\n    "wifi",\n}'''
+          if old not in text:
+              raise SystemExit("DEVICE_ESSENTIAL_KEYS anchor not found")
+          client.write_text(text.replace(old, new, 1))
+
+          activity_types = Path("src/ha_garmin/activity_types.py")
+          text = activity_types.read_text()
+          anchor = 'from .exceptions import GarminConnectError\n'
+          if 'from .gear import build_gear_source_records\n' not in text:
+              text = text.replace(anchor, anchor + 'from .gear import build_gear_source_records\n', 1)
+          old = '''        data["activityTypes"] = activity_types\n        return data\n'''
+          new = '''        data["activityTypes"] = activity_types\n        data["gearRecords"] = build_gear_source_records(\n            data, self._recent_activities_raw\n        )\n        return data\n'''
+          if old not in text:
+              raise SystemExit("fetch_gear_data return anchor not found")
+          activity_types.write_text(text.replace(old, new, 1))
+
+          init = Path("src/ha_garmin/__init__.py")
+          text = init.read_text()
+          if 'from .gear import GearItem, GearSourceRecord, build_gear_source_records\n' not in text:
+              text = text.replace(
+                  'from .exceptions import (\n',
+                  'from .gear import GearItem, GearSourceRecord, build_gear_source_records\nfrom .exceptions import (\n',
+                  1,
+              )
+          text = text.replace(
+              '    "GarminHistoryClient",\n',
+              '    "GarminHistoryClient",\n    "GearItem",\n    "GearSourceRecord",\n',
+              1,
+          )
+          text = text.replace(
+              '    "TrimpTrainingContext",\n',
+              '    "TrimpTrainingContext",\n    "build_gear_source_records",\n',
+              1,
+          )
+          init.write_text(text)
+          PY
 
       - name: Install dev dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Validate forward-port
+      - name: Validate M1 source model
         run: |
           ruff format src tests
           ruff check src tests
           mypy src
-          pytest tests/test_client.py tests/test_activity_types.py -q
+          pytest -q
 
-      - name: Commit forward-port
+      - name: Commit M1 source model and remove workflow
         run: |
+          rm .github/workflows/garmin-gear-forward-port.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src tests
-          if git diff --cached --quiet; then
-            echo "No source changes to commit"
-            exit 0
-          fi
-          git commit -m "feat(gear): forward-port Garmin Gear runtime data"
+          git add src tests .github/workflows/garmin-gear-forward-port.yml
+          git commit -m "feat(gear): add canonical M1 source records"
           git push origin HEAD:feature/garmin-gear
