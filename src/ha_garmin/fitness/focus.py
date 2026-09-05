@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -97,9 +98,17 @@ def classify_load_focus(
             dominant_focus="unknown",
         )
 
-    average_aerobic = sum(pair[0] for pair in effect_pairs if pair[0] is not None) / len(effect_pairs)
-    average_anaerobic = sum(pair[1] for pair in effect_pairs if pair[1] is not None) / len(effect_pairs)
-    dominant = _focus_from_effects(average_aerobic, average_anaerobic, dominance_ratio)
+    average_aerobic = sum(
+        pair[0] for pair in effect_pairs if pair[0] is not None
+    ) / len(effect_pairs)
+    average_anaerobic = sum(
+        pair[1] for pair in effect_pairs if pair[1] is not None
+    ) / len(effect_pairs)
+    dominant = _focus_from_effects(
+        average_aerobic,
+        average_anaerobic,
+        dominance_ratio,
+    )
 
     return LoadFocusSummary(
         total_activities=len(values),
@@ -111,6 +120,19 @@ def classify_load_focus(
     )
 
 
+def _finite_nonnegative(value: Any) -> float | None:
+    """Return a finite non-negative number, otherwise None."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(result) or result < 0:
+        return None
+    return result
+
+
 def compute_load_focus_contribution(
     aerobic_training_effect: Any,
     anaerobic_training_effect: Any,
@@ -120,19 +142,21 @@ def compute_load_focus_contribution(
     """Return one activity's low/high-aerobic and anaerobic TE contribution."""
     if high_aerobic_threshold <= 0:
         raise ValueError("high_aerobic_threshold must be positive")
-    if isinstance(aerobic_training_effect, bool) or isinstance(anaerobic_training_effect, bool):
-        return None
-    try:
-        aerobic = float(aerobic_training_effect)
-        anaerobic = float(anaerobic_training_effect)
-    except (TypeError, ValueError):
-        return None
-    if aerobic < 0 or anaerobic < 0:
+
+    aerobic = _finite_nonnegative(aerobic_training_effect)
+    anaerobic = _finite_nonnegative(anaerobic_training_effect)
+    if aerobic is None or anaerobic is None:
         return None
 
     return {
-        "low_aerobic": round(aerobic if 0 < aerobic < high_aerobic_threshold else 0.0, 3),
-        "high_aerobic": round(aerobic if aerobic >= high_aerobic_threshold else 0.0, 3),
+        "low_aerobic": round(
+            aerobic if 0 < aerobic < high_aerobic_threshold else 0.0,
+            3,
+        ),
+        "high_aerobic": round(
+            aerobic if aerobic >= high_aerobic_threshold else 0.0,
+            3,
+        ),
         "anaerobic": round(anaerobic, 3),
     }
 
