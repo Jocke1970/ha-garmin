@@ -7,6 +7,7 @@ must receive data for the requested date range only.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
@@ -37,6 +38,15 @@ _ACTIVITY_ENRICHMENT_KEYS = (
     "aerobicTrainingEffect",
     "anaerobicTrainingEffect",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class TrimpTrainingContext:
+    """Strict activity/resting-HR inputs plus their derived TRIMP history."""
+
+    activities: tuple[ActivityMetrics, ...]
+    resting_hr_by_date: dict[date, float]
+    history: TrainingHistoryResult
 
 
 def _number(value: Any) -> float | None:
@@ -264,20 +274,19 @@ class GarminHistoryClient:
         )
         return normalize_activities(raw)
 
-    async def fetch_trimp_training_history(
+    async def fetch_trimp_training_context(
         self,
         start_date: date,
         end_date: date,
         *,
         user_max_hr: float,
         sex: Sex,
-    ) -> TrainingHistoryResult:
-        """Fetch strict Garmin history and derive the canonical TRIMP series.
+    ) -> TrimpTrainingContext:
+        """Fetch strict inputs once and return them with the derived TRIMP history.
 
-        This facade deliberately reuses the wrapped authenticated client and
-        performs only date-bound historical requests. It is the intended handoff
-        point for Home Assistant coordinators once this library version is
-        released: the integration should not duplicate Fitness formulas.
+        Home Assistant can reuse the normalized activities and strict resting-HR
+        map for presentation metrics such as strain calibration and load focus
+        without refetching the same activity window or duplicating Fitness math.
         """
         if start_date > end_date:
             raise ValueError("start_date cannot be after end_date")
@@ -288,9 +297,9 @@ class GarminHistoryClient:
 
         raw = await self.get_activities_by_date(start_date, end_date)
         await self._enrich_trimp_activity_inputs(raw)
-        activities = normalize_activities(raw)
+        activities = tuple(normalize_activities(raw))
         resting_hr = await self.get_resting_heart_rate_range(start_date, end_date)
-        return build_trimp_training_history(
+        history = build_trimp_training_history(
             activities,
             start_date,
             end_date,
@@ -298,3 +307,25 @@ class GarminHistoryClient:
             user_max_hr,
             sex,
         )
+        return TrimpTrainingContext(
+            activities=activities,
+            resting_hr_by_date=resting_hr,
+            history=history,
+        )
+
+    async def fetch_trimp_training_history(
+        self,
+        start_date: date,
+        end_date: date,
+        *,
+        user_max_hr: float,
+        sex: Sex,
+    ) -> TrainingHistoryResult:
+        """Fetch strict Garmin history and derive the canonical TRIMP series."""
+        context = await self.fetch_trimp_training_context(
+            start_date,
+            end_date,
+            user_max_hr=user_max_hr,
+            sex=sex,
+        )
+        return context.history
