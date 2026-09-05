@@ -8,7 +8,7 @@ from .exceptions import (
     GarminMFARequired,
     GarminRateLimitError,
 )
-from .history import GarminHistoryClient
+from .history import GarminHistoryClient, TrimpTrainingContext
 
 __all__ = [
     "GarminAuth",
@@ -18,6 +18,7 @@ __all__ = [
     "GarminHistoryClient",
     "GarminMFARequired",
     "GarminRateLimitError",
+    "TrimpTrainingContext",
 ]
 
 __version__ = "0.1.0"

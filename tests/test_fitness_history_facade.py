@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ha_garmin import GarminAuth, GarminClient, GarminHistoryClient
+from ha_garmin import (
+    GarminAuth,
+    GarminClient,
+    GarminHistoryClient,
+    TrimpTrainingContext,
+)
 from ha_garmin.fitness import CANONICAL_LOAD_SOURCE
 
 
@@ -28,7 +33,7 @@ def _raw_activity() -> dict:
     }
 
 
-async def test_fetch_trimp_training_history_reuses_strict_history_inputs() -> None:
+async def test_fetch_trimp_training_context_reuses_strict_history_inputs() -> None:
     client = _make_client()
     history = GarminHistoryClient(client)
     start = date(2026, 9, 1)
@@ -48,7 +53,7 @@ async def test_fetch_trimp_training_history_reuses_strict_history_inputs() -> No
             return_value={date(2026, 9, 2): 50.0},
         ) as rhr_fetch,
     ):
-        result = await history.fetch_trimp_training_history(
+        context = await history.fetch_trimp_training_context(
             start,
             end,
             user_max_hr=175,
@@ -57,12 +62,46 @@ async def test_fetch_trimp_training_history_reuses_strict_history_inputs() -> No
 
     activity_fetch.assert_awaited_once_with(start, end)
     rhr_fetch.assert_awaited_once_with(start, end)
+    assert isinstance(context, TrimpTrainingContext)
+    assert len(context.activities) == 1
+    assert context.resting_hr_by_date == {date(2026, 9, 2): 50.0}
     assert CANONICAL_LOAD_SOURCE == "trimp"
+    assert context.history.source == "trimp"
+    assert context.history.assessment.ready is True
+    assert len(context.history.daily_loads) == 2
+    assert context.history.daily_loads[0].load == 0.0
+    assert context.history.daily_loads[1].load is not None
+
+
+async def test_fetch_trimp_training_history_delegates_to_context() -> None:
+    client = _make_client()
+    history = GarminHistoryClient(client)
+    start = date(2026, 9, 1)
+    end = date(2026, 9, 2)
+
+    with (
+        patch.object(
+            history,
+            "get_activities_by_date",
+            new_callable=AsyncMock,
+            return_value=[_raw_activity()],
+        ),
+        patch.object(
+            history,
+            "get_resting_heart_rate_range",
+            new_callable=AsyncMock,
+            return_value={date(2026, 9, 2): 50.0},
+        ),
+    ):
+        result = await history.fetch_trimp_training_history(
+            start,
+            end,
+            user_max_hr=175,
+            sex="male",
+        )
+
     assert result.source == "trimp"
     assert result.assessment.ready is True
-    assert len(result.daily_loads) == 2
-    assert result.daily_loads[0].load == 0.0
-    assert result.daily_loads[1].load is not None
     assert len(result.training_points) == 2
     assert result.training_points[-1].daily_load == result.daily_loads[-1].load
 
