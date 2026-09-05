@@ -1,0 +1,257 @@
+name: Patch Garmin sensor battery support
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Patch client and tests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          client_path = Path('src/ha_garmin/client.py')
+          test_path = Path('tests/test_client.py')
+          client = client_path.read_text()
+          tests = test_path.read_text()
+
+          old = '''DEVICE_ESSENTIAL_KEYS = {
+              "deviceId",
+              "unitId",
+              "displayName",
+              "productDisplayName",
+              "applicationKey",
+              "serialNumber",
+              "partNumber",
+              "productSku",
+              "imageUrl",
+              "primary",
+              "primaryActivityTrackerIndicator",
+              "deviceCategories",
+              "wifi",
+          }
+          '''
+          new = old + '''
+          # Recent ANT+/BLE sensor payloads are small, but keep a stable explicit
+          # schema for coordinator consumers. ``serialNumber`` is retained as an
+          # internal identity candidate; diagnostics/UI layers may redact or omit it.
+          SENSOR_ESSENTIAL_KEYS = {
+              "deviceName",
+              "imageUrl",
+              "batteryStatus",
+              "batteryLevel",
+              "sensorType",
+              "prioritySensor",
+              "serialNumber",
+              "productId",
+              "partNumber",
+              "softwareVersion",
+              "lastConnected",
+              "lastLowBatteryNotification",
+              "manufacturer",
+              "rechargeableSensorCapable",
+          }
+          '''
+          if old not in client:
+              raise SystemExit('DEVICE_ESSENTIAL_KEYS anchor not found')
+          client = client.replace(old, new, 1)
+
+          old = '''DATETIME_FIELDS_PARSE_UTC = {
+              "updateDate",
+              "createdDate",
+              "lastUpdated",
+          }
+          '''
+          new = '''DATETIME_FIELDS_PARSE_UTC = {
+              "updateDate",
+              "createdDate",
+              "lastUpdated",
+              "lastConnected",
+          }
+          '''
+          if old not in client:
+              raise SystemExit('DATETIME_FIELDS_PARSE_UTC anchor not found')
+          client = client.replace(old, new, 1)
+
+          old = '''def _trim_device(device: dict[str, Any]) -> dict[str, Any]:
+              """Trim a registered device to essential fields only."""
+              return {k: v for k, v in device.items() if k in DEVICE_ESSENTIAL_KEYS}
+
+
+          def _is_cycling_activity(activity: dict[str, Any]) -> bool:
+          '''
+          new = '''def _trim_device(device: dict[str, Any]) -> dict[str, Any]:
+              """Trim a registered device to essential fields only."""
+              return {k: v for k, v in device.items() if k in DEVICE_ESSENTIAL_KEYS}
+
+
+          def _trim_sensor(sensor: dict[str, Any]) -> dict[str, Any]:
+              """Trim and normalize a recent ANT+/BLE sensor payload."""
+              trimmed = {k: v for k, v in sensor.items() if k in SENSOR_ESSENTIAL_KEYS}
+              return _convert_datetime_fields(trimmed)
+
+
+          def _is_cycling_activity(activity: dict[str, Any]) -> bool:
+          '''
+          if old not in client:
+              raise SystemExit('_trim_device anchor not found')
+          client = client.replace(old, new, 1)
+
+          old = '''    async def fetch_gear_data(self, timezone: str | None = None) -> dict[str, Any]:
+              """Fetch gear data: gear, defaults, stats, alarms, solar, devices.
+
+              API calls: get_gear, get_gear_defaults, get_gear_details×N
+                         (legacy get_gear_stats fallback),
+                         get_devices, get_device_alarms, get_device_solar_data×N,
+                         get_device_last_used
+              """
+          '''
+          new = '''    async def fetch_gear_data(self, timezone: str | None = None) -> dict[str, Any]:
+              """Fetch gear, Garmin devices and recently used ANT+/BLE sensors.
+
+              API calls: get_gear, get_gear_defaults, get_gear_details×N
+                         (legacy get_gear_stats fallback),
+                         get_devices, get_sensors, get_device_alarms,
+                         get_device_solar_data×N, get_device_last_used
+              """
+          '''
+          if old not in client:
+              raise SystemExit('fetch_gear_data docstring anchor not found')
+          client = client.replace(old, new, 1)
+
+          old = '''        # Devices (shared by alarms and solar)
+              devices = await self._safe_call(self.get_devices) or []
+              trimmed_devices = [_trim_device(d) for d in devices]
+
+              # Last used device / last sync time
+          '''
+          new = '''        # Devices (shared by alarms and solar)
+              devices = await self._safe_call(self.get_devices) or []
+              trimmed_devices = [_trim_device(d) for d in devices]
+
+              # Garmin Connect exposes recently used ANT+/BLE accessories separately
+              # from registered Garmin devices. The list carries battery level/status
+              # and last-connected time when the accessory reports them.
+              sensors = await self._safe_call(self.get_sensors) or []
+              trimmed_sensors = [
+                  _trim_sensor(sensor)
+                  for sensor in sensors
+                  if isinstance(sensor, dict)
+              ]
+
+              # Last used device / last sync time
+          '''
+          if old not in client:
+              raise SystemExit('devices block anchor not found')
+          client = client.replace(old, new, 1)
+
+          old = '''            "solarIntensity": solar_intensity,
+              "devices": trimmed_devices,
+              "lastUsedDevice": last_used_device,
+          '''
+          new = '''            "solarIntensity": solar_intensity,
+              "devices": trimmed_devices,
+              "sensors": trimmed_sensors,
+              "lastUsedDevice": last_used_device,
+          '''
+          if old not in client:
+              raise SystemExit('fetch_gear_data return anchor not found')
+          client = client.replace(old, new, 1)
+
+          # Existing fetch_gear_data tests mock devices; mock the new sensor call too.
+          device_mock = '            patch.object(client, "get_devices", AsyncMock(return_value=[])),\n'
+          sensor_mock = device_mock + '            patch.object(client, "get_sensors", AsyncMock(return_value=[])),\n'
+          if device_mock not in tests:
+              raise SystemExit('No get_devices test mocks found')
+          tests = tests.replace(device_mock, sensor_mock)
+
+          marker = '''    async def test_fetch_gear_data_prefers_v2_usage_metadata(self):
+          '''
+          added_test = '''    async def test_fetch_gear_data_includes_recent_sensor_battery_data(self):
+              """Recent ANT+/BLE sensors are normalized into the gear coordinator."""
+              auth = _make_auth()
+              client = GarminClient(auth)
+              profile = MagicMock(profile_id=None)
+              sensor_payload = {
+                  "deviceName": None,
+                  "imageUrl": None,
+                  "batteryStatus": "OK",
+                  "batteryLevel": 75,
+                  "sensorType": "HEART_RATE",
+                  "prioritySensor": False,
+                  "serialNumber": "123456",
+                  "productId": None,
+                  "partNumber": None,
+                  "softwareVersion": "0.3",
+                  "lastConnected": "2026-08-16T13:26:00.0",
+                  "lastLowBatteryNotification": None,
+                  "manufacturer": None,
+                  "rechargeableSensorCapable": None,
+                  "unexpectedField": "drop-me",
+              }
+
+              with (
+                  patch.object(client, "get_user_profile", AsyncMock(return_value=profile)),
+                  patch.object(client, "get_devices", AsyncMock(return_value=[])),
+                  patch.object(client, "get_sensors", AsyncMock(return_value=[sensor_payload])),
+                  patch.object(client, "get_device_last_used", AsyncMock(return_value={})),
+                  patch.object(client, "get_device_alarms", AsyncMock(return_value=[])),
+              ):
+                  data = await client.fetch_gear_data()
+
+              assert len(data["sensors"]) == 1
+              sensor = data["sensors"][0]
+              assert sensor["sensorType"] == "HEART_RATE"
+              assert sensor["batteryLevel"] == 75
+              assert sensor["batteryStatus"] == "OK"
+              assert sensor["serialNumber"] == "123456"
+              assert sensor["lastConnected"] == datetime(
+                  2026, 8, 16, 13, 26, tzinfo=UTC
+              )
+              assert "unexpectedField" not in sensor
+
+          '''
+          if marker not in tests:
+              raise SystemExit('Gear test insertion marker not found')
+          tests = tests.replace(marker, added_test + marker, 1)
+
+          client_path.write_text(client)
+          test_path.write_text(tests)
+          PY
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Format and validate
+        run: |
+          ruff format src tests
+          ruff check src tests
+          mypy src
+          pytest tests/test_client.py -q
+
+      - name: Commit patch and remove one-shot workflow
+        run: |
+          rm .github/workflows/patch-garmin-sensor-battery.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: expose recent Garmin sensor battery data'
+          git push origin main
