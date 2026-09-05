@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 from .const import LOAD_FOCUS_DOMINANCE_RATIO, LOAD_FOCUS_HIGH_AEROBIC_THRESHOLD
 from .models import ActivityMetrics
@@ -76,14 +76,7 @@ def classify_load_focus(
     activities: Iterable[ActivityMetrics],
     dominance_ratio: float = LOAD_FOCUS_DOMINANCE_RATIO,
 ) -> LoadFocusSummary:
-    """Classify recent training focus from average Garmin Training Effect.
-
-    This mirrors the PulseCoach-inspired MVP rule: average aerobic and
-    anaerobic Training Effect across activities that provide both values, then
-    require one average to exceed the other by ``dominance_ratio``. Activities
-    missing either Training Effect value are excluded and make ``complete``
-    false rather than being interpreted as zero.
-    """
+    """Classify recent training focus from average Garmin Training Effect."""
     if dominance_ratio <= 1.0:
         raise ValueError("dominance_ratio must be greater than 1")
 
@@ -104,17 +97,9 @@ def classify_load_focus(
             dominant_focus="unknown",
         )
 
-    average_aerobic = sum(
-        pair[0] for pair in effect_pairs if pair[0] is not None
-    ) / len(effect_pairs)
-    average_anaerobic = sum(
-        pair[1] for pair in effect_pairs if pair[1] is not None
-    ) / len(effect_pairs)
-    dominant = _focus_from_effects(
-        average_aerobic,
-        average_anaerobic,
-        dominance_ratio,
-    )
+    average_aerobic = sum(pair[0] for pair in effect_pairs if pair[0] is not None) / len(effect_pairs)
+    average_anaerobic = sum(pair[1] for pair in effect_pairs if pair[1] is not None) / len(effect_pairs)
+    dominant = _focus_from_effects(average_aerobic, average_anaerobic, dominance_ratio)
 
     return LoadFocusSummary(
         total_activities=len(values),
@@ -126,6 +111,75 @@ def classify_load_focus(
     )
 
 
+def compute_load_focus_contribution(
+    aerobic_training_effect: Any,
+    anaerobic_training_effect: Any,
+    *,
+    high_aerobic_threshold: float = LOAD_FOCUS_HIGH_AEROBIC_THRESHOLD,
+) -> dict[str, float] | None:
+    """Return one activity's low/high-aerobic and anaerobic TE contribution."""
+    if high_aerobic_threshold <= 0:
+        raise ValueError("high_aerobic_threshold must be positive")
+    if isinstance(aerobic_training_effect, bool) or isinstance(anaerobic_training_effect, bool):
+        return None
+    try:
+        aerobic = float(aerobic_training_effect)
+        anaerobic = float(anaerobic_training_effect)
+    except (TypeError, ValueError):
+        return None
+    if aerobic < 0 or anaerobic < 0:
+        return None
+
+    return {
+        "low_aerobic": round(aerobic if 0 < aerobic < high_aerobic_threshold else 0.0, 3),
+        "high_aerobic": round(aerobic if aerobic >= high_aerobic_threshold else 0.0, 3),
+        "anaerobic": round(anaerobic, 3),
+    }
+
+
+def build_load_focus_day(
+    training_effects: Iterable[tuple[Any, Any]],
+    *,
+    high_aerobic_threshold: float = LOAD_FOCUS_HIGH_AEROBIC_THRESHOLD,
+) -> dict[str, Any]:
+    """Aggregate one calendar day's transparent Training Effect buckets."""
+    effects = list(training_effects)
+    low_aerobic = 0.0
+    high_aerobic = 0.0
+    anaerobic = 0.0
+    covered = 0
+
+    for aerobic, anaerobic_effect in effects:
+        contribution = compute_load_focus_contribution(
+            aerobic,
+            anaerobic_effect,
+            high_aerobic_threshold=high_aerobic_threshold,
+        )
+        if contribution is None:
+            continue
+        covered += 1
+        low_aerobic += contribution["low_aerobic"]
+        high_aerobic += contribution["high_aerobic"]
+        anaerobic += contribution["anaerobic"]
+
+    complete = covered == len(effects)
+    known_low = round(low_aerobic, 3)
+    known_high = round(high_aerobic, 3)
+    known_anaerobic = round(anaerobic, 3)
+    return {
+        "complete": complete,
+        "activity_count": len(effects),
+        "covered_activities": covered,
+        "missing_activities": len(effects) - covered,
+        "low_aerobic": known_low if complete else None,
+        "high_aerobic": known_high if complete else None,
+        "anaerobic": known_anaerobic if complete else None,
+        "known_low_aerobic": known_low,
+        "known_high_aerobic": known_high,
+        "known_anaerobic": known_anaerobic,
+    }
+
+
 def build_daily_load_focus_series(
     activities: Iterable[ActivityMetrics],
     start_date: date,
@@ -133,13 +187,7 @@ def build_daily_load_focus_series(
     *,
     high_aerobic_threshold: float = LOAD_FOCUS_HIGH_AEROBIC_THRESHOLD,
 ) -> list[DailyLoadFocus]:
-    """Build continuous daily low/high-aerobic and anaerobic TE buckets.
-
-    The split is a transparent Garmin Fitness v1 heuristic, not Garmin's
-    proprietary Load Focus algorithm. A rest day is a complete zero day. If an
-    activity is missing either Training Effect value, that day remains
-    incomplete and bucket values are ``None`` instead of fabricated zeros.
-    """
+    """Build continuous daily low/high-aerobic and anaerobic TE buckets."""
     if start_date > end_date:
         raise ValueError("start_date cannot be after end_date")
     if high_aerobic_threshold <= 0:
@@ -154,50 +202,22 @@ def build_daily_load_focus_series(
     current = start_date
     while current <= end_date:
         day_activities = grouped.get(current, [])
-        if not day_activities:
-            result.append(
-                DailyLoadFocus(
-                    date=current,
-                    activity_count=0,
-                    covered_activities=0,
-                    complete=True,
-                    low_aerobic=0.0,
-                    high_aerobic=0.0,
-                    anaerobic=0.0,
-                )
-            )
-            current += timedelta(days=1)
-            continue
-
-        low_aerobic = 0.0
-        high_aerobic = 0.0
-        anaerobic = 0.0
-        covered = 0
-        for activity in day_activities:
-            aerobic = activity.aerobic_training_effect
-            anaerobic_effect = activity.anaerobic_training_effect
-            if aerobic is None or anaerobic_effect is None:
-                continue
-            if aerobic < 0 or anaerobic_effect < 0:
-                continue
-
-            covered += 1
-            if 0 < aerobic < high_aerobic_threshold:
-                low_aerobic += aerobic
-            elif aerobic >= high_aerobic_threshold:
-                high_aerobic += aerobic
-            anaerobic += anaerobic_effect
-
-        complete = covered == len(day_activities)
+        day = build_load_focus_day(
+            (
+                (activity.aerobic_training_effect, activity.anaerobic_training_effect)
+                for activity in day_activities
+            ),
+            high_aerobic_threshold=high_aerobic_threshold,
+        )
         result.append(
             DailyLoadFocus(
                 date=current,
-                activity_count=len(day_activities),
-                covered_activities=covered,
-                complete=complete,
-                low_aerobic=round(low_aerobic, 3) if complete else None,
-                high_aerobic=round(high_aerobic, 3) if complete else None,
-                anaerobic=round(anaerobic, 3) if complete else None,
+                activity_count=day["activity_count"],
+                covered_activities=day["covered_activities"],
+                complete=day["complete"],
+                low_aerobic=day["low_aerobic"],
+                high_aerobic=day["high_aerobic"],
+                anaerobic=day["anaerobic"],
             )
         )
         current += timedelta(days=1)
