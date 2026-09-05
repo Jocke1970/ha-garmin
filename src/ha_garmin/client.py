@@ -32,6 +32,7 @@ from .const import (
     GEAR_LINK_URL,
     GEAR_STATS_URL,
     GEAR_URL,
+    GEAR_V2_URL,
     GOALS_URL,
     HILL_SCORE_URL,
     HRV_URL,
@@ -111,6 +112,7 @@ ACTIVITY_ESSENTIAL_KEYS = {
     # Identity
     "activityId",
     "activityName",
+    "deviceId",
     # Time
     "startTimeLocal",
     "startTimeGMT",
@@ -215,6 +217,26 @@ DEVICE_ESSENTIAL_KEYS = {
     "wifi",
 }
 
+# Recent ANT+/BLE sensor payloads are small, but keep a stable explicit
+# schema for coordinator consumers. ``serialNumber`` is retained as an
+# internal identity candidate; diagnostics/UI layers may redact or omit it.
+SENSOR_ESSENTIAL_KEYS = {
+    "deviceName",
+    "imageUrl",
+    "batteryStatus",
+    "batteryLevel",
+    "sensorType",
+    "prioritySensor",
+    "serialNumber",
+    "productId",
+    "partNumber",
+    "softwareVersion",
+    "lastConnected",
+    "lastLowBatteryNotification",
+    "manufacturer",
+    "rechargeableSensorCapable",
+}
+
 # GMT datetime fields to rename and convert to UTC timezone
 # Maps: original GMT field name -> new clean field name
 DATETIME_FIELDS_GMT_RENAME = {
@@ -239,6 +261,7 @@ DATETIME_FIELDS_PARSE_UTC = {
     "updateDate",
     "createdDate",
     "lastUpdated",
+    "lastConnected",
 }
 
 # Local datetime fields to DROP (we use GMT/UTC versions instead)
@@ -336,6 +359,12 @@ def _convert_datetime_fields(data: dict[str, Any]) -> dict[str, Any]:
 def _trim_device(device: dict[str, Any]) -> dict[str, Any]:
     """Trim a registered device to essential fields only."""
     return {k: v for k, v in device.items() if k in DEVICE_ESSENTIAL_KEYS}
+
+
+def _trim_sensor(sensor: dict[str, Any]) -> dict[str, Any]:
+    """Trim and normalize a recent ANT+/BLE sensor payload."""
+    trimmed = {k: v for k, v in sensor.items() if k in SENSOR_ESSENTIAL_KEYS}
+    return _convert_datetime_fields(trimmed)
 
 
 def _is_cycling_activity(activity: dict[str, Any]) -> bool:
@@ -1355,9 +1384,26 @@ class GarminClient:
         return data if isinstance(data, list) else []
 
     async def get_gear_stats(self, gear_uuid: str) -> dict[str, Any]:
-        """Get gear statistics."""
+        """Get legacy gear statistics."""
         _validate_uuid(gear_uuid, "gear_uuid")
         url = f"{GEAR_STATS_URL}/{gear_uuid}"
+        data = await self._request("GET", url)
+        return data if isinstance(data, dict) else {}
+
+    async def get_gear_details(self, gear_uuid: str) -> dict[str, Any]:
+        """Get Garmin Gear v2 details and usage statistics.
+
+        The v2 endpoint is used by the current Garmin Connect Gear editor and
+        exposes the selected usage metric (distance or duration), detailed gear
+        type, brand/model, days used, linked activities and activity associations.
+        """
+        validated_uuid = _validate_uuid(gear_uuid, "gear_uuid")
+        normalized_uuid = validated_uuid.replace("-", "")
+        canonical_uuid = (
+            f"{normalized_uuid[:8]}-{normalized_uuid[8:12]}-{normalized_uuid[12:16]}-"
+            f"{normalized_uuid[16:20]}-{normalized_uuid[20:]}"
+        )
+        url = f"{GEAR_V2_URL}/{canonical_uuid}"
         data = await self._request("GET", url)
         return data if isinstance(data, dict) else {}
 
@@ -2660,11 +2706,12 @@ class GarminClient:
         }
 
     async def fetch_gear_data(self, timezone: str | None = None) -> dict[str, Any]:
-        """Fetch gear data: gear, defaults, stats, alarms, solar, devices.
+        """Fetch gear, Garmin devices and recently used ANT+/BLE sensors.
 
-        API calls: get_gear, get_gear_defaults, get_gear_stats×N,
-                   get_devices, get_device_alarms, get_device_solar_data×N,
-                   get_device_last_used
+        API calls: get_gear, get_gear_defaults, get_gear_details×N
+                   (legacy get_gear_stats fallback),
+                   get_devices, get_sensors, get_device_alarms,
+                   get_device_solar_data×N, get_device_last_used
         """
         # Get user profile ID for gear API
         profile = await self._safe_call(self.get_user_profile)
@@ -2707,10 +2754,42 @@ class GarminClient:
                 for gear_item in gear:
                     gear_uuid = gear_item.get("uuid")
                     if gear_uuid:
-                        stats = await self._safe_call(self.get_gear_stats, gear_uuid)
+                        # Garmin Connect's current Gear editor uses v2. It exposes
+                        # the user-selected usage metric plus richer taxonomy. Use
+                        # it as the primary per-Gear read and fall back to the
+                        # legacy stats endpoint for older/unsupported accounts.
+                        stats = await self._safe_call(self.get_gear_details, gear_uuid)
                         if stats:
+                            stats = dict(stats)
+                            # Preserve the compact UUID used by long-lived HA entity IDs.
+                            # Garmin v2's canonical UUID remains available separately.
+                            stats["v2Uuid"] = stats.get("uuid")
+                            stats["uuid"] = gear_uuid
                             stats["gearUuid"] = gear_uuid
-                            stats["gearName"] = gear_item.get("displayName", "Unknown")
+                            if stats.get("totalDistance") is None:
+                                stats["totalDistance"] = stats.get("distanceUsedMeters")
+                            if stats.get("totalActivities") is None:
+                                stats["totalActivities"] = stats.get(
+                                    "numActivitiesLinked"
+                                )
+                            if stats.get("isProcessing") is None:
+                                stats["isProcessing"] = bool(
+                                    stats.get("processing", False)
+                                )
+                        else:
+                            stats = await self._safe_call(
+                                self.get_gear_stats, gear_uuid
+                            )
+
+                        if stats:
+                            # Keep the legacy aliases stable while also preserving
+                            # every Gear v2 field for richer HA consumers.
+                            stats["gearUuid"] = stats.get("gearUuid") or gear_uuid
+                            stats["gearName"] = (
+                                stats.get("name")
+                                or gear_item.get("displayName")
+                                or "Unknown"
+                            )
                             stats["gearTypeName"] = gear_item.get(
                                 "gearTypeName", "Unknown"
                             )
@@ -2731,6 +2810,14 @@ class GarminClient:
         # Devices (shared by alarms and solar)
         devices = await self._safe_call(self.get_devices) or []
         trimmed_devices = [_trim_device(d) for d in devices]
+
+        # Garmin Connect exposes recently used ANT+/BLE accessories separately
+        # from registered Garmin devices. The list carries battery level/status
+        # and last-connected time when the accessory reports them.
+        sensors = await self._safe_call(self.get_sensors) or []
+        trimmed_sensors = [
+            _trim_sensor(sensor) for sensor in sensors if isinstance(sensor, dict)
+        ]
 
         # Last used device / last sync time
         last_used_device = await self._safe_call(self.get_device_last_used) or {}
@@ -2778,6 +2865,7 @@ class GarminClient:
             "nextAlarm": next_alarms,
             "solarIntensity": solar_intensity,
             "devices": trimmed_devices,
+            "sensors": trimmed_sensors,
             "lastUsedDevice": last_used_device,
         }
 
