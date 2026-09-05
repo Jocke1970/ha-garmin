@@ -19,3 +19,7 @@ BANISTER_TRIMP_K_FEMALE = 1.67
 DEFAULT_PERSONAL_TRIMP_MAX = 250.0
 STRAIN_HARD_DAY_THRESHOLD = 14.0
 LOAD_FOCUS_DOMINANCE_RATIO = 1.5
+# Transparent v1 heuristic used for the Home Assistant low/high aerobic split.
+# Garmin Aerobic Training Effect >= 3.0 contributes to high aerobic; positive
+# values below 3.0 contribute to low aerobic. Anaerobic TE is tracked separately.
+LOAD_FOCUS_HIGH_AEROBIC_THRESHOLD = 3.0
