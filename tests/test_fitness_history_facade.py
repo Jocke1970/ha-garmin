@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ha_garmin import GarminAuth, GarminClient, GarminHistoryClient, TrimpTrainingContext
+from ha_garmin import (
+    GarminAuth,
+    GarminClient,
+    GarminHistoryClient,
+    TrimpTrainingContext,
+)
 from ha_garmin.fitness import CANONICAL_LOAD_SOURCE
 
 
