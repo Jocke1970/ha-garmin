@@ -9,7 +9,7 @@ from .exceptions import (
     GarminRateLimitError,
 )
 from .history import GarminHistoryClient, TrimpTrainingContext
-from .insights import DailyRecoveryMetrics
+from .insights import DailyRecoveryMetrics, InsightSnapshot, build_insight_snapshot
 
 __all__ = [
     "DailyRecoveryMetrics",
@@ -20,7 +20,9 @@ __all__ = [
     "GarminHistoryClient",
     "GarminMFARequired",
     "GarminRateLimitError",
+    "InsightSnapshot",
     "TrimpTrainingContext",
+    "build_insight_snapshot",
 ]
 
 __version__ = "0.1.0"
