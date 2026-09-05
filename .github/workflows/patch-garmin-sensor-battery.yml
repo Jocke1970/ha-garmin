@@ -31,12 +31,12 @@ jobs:
           client = client_path.read_text()
           tests = test_path.read_text()
 
-          def replace_once(text: str, old: str, new: str, label: str) -> str:
+          def replace_once(text, old, new, label):
               if old not in text:
                   raise SystemExit(f'{label} anchor not found')
               return text.replace(old, new, 1)
 
-          old = '''DEVICE_ESSENTIAL_KEYS = {
+          device_keys = '''DEVICE_ESSENTIAL_KEYS = {
               "deviceId",
               "unitId",
               "displayName",
@@ -52,7 +52,7 @@ jobs:
               "wifi",
           }
           '''
-          new = old + '''
+          sensor_keys = device_keys + '''
           # Recent ANT+/BLE sensor payloads are small, but keep a stable explicit
           # schema for coordinator consumers. ``serialNumber`` is retained as an
           # internal identity candidate; diagnostics/UI layers may redact or omit it.
@@ -73,44 +73,25 @@ jobs:
               "rechargeableSensorCapable",
           }
           '''
-          client = replace_once(client, old, new, 'DEVICE_ESSENTIAL_KEYS')
+          client = replace_once(client, device_keys, sensor_keys, 'DEVICE_ESSENTIAL_KEYS')
 
-          old = '''DATETIME_FIELDS_PARSE_UTC = {
-              "updateDate",
-              "createdDate",
-              "lastUpdated",
-          }
+          client = replace_once(
+              client,
+              '    "lastUpdated",\n}',
+              '    "lastUpdated",\n    "lastConnected",\n}',
+              'lastConnected datetime field',
+          )
+
+          trim_anchor = '''def _is_cycling_activity(activity: dict[str, Any]) -> bool:
           '''
-          new = '''DATETIME_FIELDS_PARSE_UTC = {
-              "updateDate",
-              "createdDate",
-              "lastUpdated",
-              "lastConnected",
-          }
-          '''
-          client = replace_once(client, old, new, 'DATETIME_FIELDS_PARSE_UTC')
-
-          old = '''def _trim_device(device: dict[str, Any]) -> dict[str, Any]:
-              """Trim a registered device to essential fields only."""
-              return {k: v for k, v in device.items() if k in DEVICE_ESSENTIAL_KEYS}
-
-
-          def _is_cycling_activity(activity: dict[str, Any]) -> bool:
-          '''
-          new = '''def _trim_device(device: dict[str, Any]) -> dict[str, Any]:
-              """Trim a registered device to essential fields only."""
-              return {k: v for k, v in device.items() if k in DEVICE_ESSENTIAL_KEYS}
-
-
-          def _trim_sensor(sensor: dict[str, Any]) -> dict[str, Any]:
+          trim_sensor = '''def _trim_sensor(sensor: dict[str, Any]) -> dict[str, Any]:
               """Trim and normalize a recent ANT+/BLE sensor payload."""
               trimmed = {k: v for k, v in sensor.items() if k in SENSOR_ESSENTIAL_KEYS}
               return _convert_datetime_fields(trimmed)
 
 
-          def _is_cycling_activity(activity: dict[str, Any]) -> bool:
-          '''
-          client = replace_once(client, old, new, '_trim_device')
+          ''' + trim_anchor
+          client = replace_once(client, trim_anchor, trim_sensor, '_trim_sensor insertion')
 
           client = replace_once(
               client,
@@ -125,16 +106,8 @@ jobs:
               'fetch_gear_data API list',
           )
 
-          old = '''        # Devices (shared by alarms and solar)
-              devices = await self._safe_call(self.get_devices) or []
-              trimmed_devices = [_trim_device(d) for d in devices]
-
-              # Last used device / last sync time
-          '''
-          new = '''        # Devices (shared by alarms and solar)
-              devices = await self._safe_call(self.get_devices) or []
-              trimmed_devices = [_trim_device(d) for d in devices]
-
+          device_line = '        trimmed_devices = [_trim_device(d) for d in devices]\n'
+          sensor_block = device_line + '''
               # Garmin Connect exposes recently used ANT+/BLE accessories separately
               # from registered Garmin devices. The list carries battery level/status
               # and last-connected time when the accessory reports them.
@@ -144,23 +117,17 @@ jobs:
                   for sensor in sensors
                   if isinstance(sensor, dict)
               ]
-
-              # Last used device / last sync time
           '''
-          client = replace_once(client, old, new, 'devices block')
+          client = replace_once(client, device_line, sensor_block, 'trimmed_devices')
 
-          old = '''            "solarIntensity": solar_intensity,
-              "devices": trimmed_devices,
-              "lastUsedDevice": last_used_device,
-          '''
-          new = '''            "solarIntensity": solar_intensity,
-              "devices": trimmed_devices,
-              "sensors": trimmed_sensors,
-              "lastUsedDevice": last_used_device,
-          '''
-          client = replace_once(client, old, new, 'fetch_gear_data return')
+          client = replace_once(
+              client,
+              '            "devices": trimmed_devices,\n',
+              '            "devices": trimmed_devices,\n            "sensors": trimmed_sensors,\n',
+              'devices return field',
+          )
 
-          # Existing fetch_gear_data tests mock devices; mock the new sensor call too.
+          # Existing fetch_gear_data tests must not call Garmin over the network.
           device_mock = '            patch.object(client, "get_devices", AsyncMock(return_value=[])),\n'
           sensor_mock = device_mock + '            patch.object(client, "get_sensors", AsyncMock(return_value=[])),\n'
           if device_mock not in tests:
