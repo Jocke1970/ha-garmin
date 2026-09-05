@@ -31,6 +31,11 @@ jobs:
           client = client_path.read_text()
           tests = test_path.read_text()
 
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if old not in text:
+                  raise SystemExit(f'{label} anchor not found')
+              return text.replace(old, new, 1)
+
           old = '''DEVICE_ESSENTIAL_KEYS = {
               "deviceId",
               "unitId",
@@ -68,9 +73,7 @@ jobs:
               "rechargeableSensorCapable",
           }
           '''
-          if old not in client:
-              raise SystemExit('DEVICE_ESSENTIAL_KEYS anchor not found')
-          client = client.replace(old, new, 1)
+          client = replace_once(client, old, new, 'DEVICE_ESSENTIAL_KEYS')
 
           old = '''DATETIME_FIELDS_PARSE_UTC = {
               "updateDate",
@@ -85,9 +88,7 @@ jobs:
               "lastConnected",
           }
           '''
-          if old not in client:
-              raise SystemExit('DATETIME_FIELDS_PARSE_UTC anchor not found')
-          client = client.replace(old, new, 1)
+          client = replace_once(client, old, new, 'DATETIME_FIELDS_PARSE_UTC')
 
           old = '''def _trim_device(device: dict[str, Any]) -> dict[str, Any]:
               """Trim a registered device to essential fields only."""
@@ -109,31 +110,20 @@ jobs:
 
           def _is_cycling_activity(activity: dict[str, Any]) -> bool:
           '''
-          if old not in client:
-              raise SystemExit('_trim_device anchor not found')
-          client = client.replace(old, new, 1)
+          client = replace_once(client, old, new, '_trim_device')
 
-          old = '''    async def fetch_gear_data(self, timezone: str | None = None) -> dict[str, Any]:
-              """Fetch gear data: gear, defaults, stats, alarms, solar, devices.
-
-              API calls: get_gear, get_gear_defaults, get_gear_details×N
-                         (legacy get_gear_stats fallback),
-                         get_devices, get_device_alarms, get_device_solar_data×N,
-                         get_device_last_used
-              """
-          '''
-          new = '''    async def fetch_gear_data(self, timezone: str | None = None) -> dict[str, Any]:
-              """Fetch gear, Garmin devices and recently used ANT+/BLE sensors.
-
-              API calls: get_gear, get_gear_defaults, get_gear_details×N
-                         (legacy get_gear_stats fallback),
-                         get_devices, get_sensors, get_device_alarms,
-                         get_device_solar_data×N, get_device_last_used
-              """
-          '''
-          if old not in client:
-              raise SystemExit('fetch_gear_data docstring anchor not found')
-          client = client.replace(old, new, 1)
+          client = replace_once(
+              client,
+              '        """Fetch gear data: gear, defaults, stats, alarms, solar, devices.\n',
+              '        """Fetch gear, Garmin devices and recently used ANT+/BLE sensors.\n',
+              'fetch_gear_data summary',
+          )
+          client = replace_once(
+              client,
+              '                   get_devices, get_device_alarms, get_device_solar_data×N,\n                   get_device_last_used\n',
+              '                   get_devices, get_sensors, get_device_alarms,\n                   get_device_solar_data×N, get_device_last_used\n',
+              'fetch_gear_data API list',
+          )
 
           old = '''        # Devices (shared by alarms and solar)
               devices = await self._safe_call(self.get_devices) or []
@@ -157,9 +147,7 @@ jobs:
 
               # Last used device / last sync time
           '''
-          if old not in client:
-              raise SystemExit('devices block anchor not found')
-          client = client.replace(old, new, 1)
+          client = replace_once(client, old, new, 'devices block')
 
           old = '''            "solarIntensity": solar_intensity,
               "devices": trimmed_devices,
@@ -170,9 +158,7 @@ jobs:
               "sensors": trimmed_sensors,
               "lastUsedDevice": last_used_device,
           '''
-          if old not in client:
-              raise SystemExit('fetch_gear_data return anchor not found')
-          client = client.replace(old, new, 1)
+          client = replace_once(client, old, new, 'fetch_gear_data return')
 
           # Existing fetch_gear_data tests mock devices; mock the new sensor call too.
           device_mock = '            patch.object(client, "get_devices", AsyncMock(return_value=[])),\n'
@@ -181,8 +167,7 @@ jobs:
               raise SystemExit('No get_devices test mocks found')
           tests = tests.replace(device_mock, sensor_mock)
 
-          marker = '''    async def test_fetch_gear_data_prefers_v2_usage_metadata(self):
-          '''
+          marker = '    async def test_fetch_gear_data_prefers_v2_usage_metadata(self):\n'
           added_test = '''    async def test_fetch_gear_data_includes_recent_sensor_battery_data(self):
               """Recent ANT+/BLE sensors are normalized into the gear coordinator."""
               auth = _make_auth()
