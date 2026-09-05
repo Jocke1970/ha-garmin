@@ -216,6 +216,26 @@ DEVICE_ESSENTIAL_KEYS = {
     "wifi",
 }
 
+# Recent ANT+/BLE sensor payloads are small, but keep a stable explicit
+# schema for coordinator consumers. ``serialNumber`` is retained as an
+# internal identity candidate; diagnostics/UI layers may redact or omit it.
+SENSOR_ESSENTIAL_KEYS = {
+    "deviceName",
+    "imageUrl",
+    "batteryStatus",
+    "batteryLevel",
+    "sensorType",
+    "prioritySensor",
+    "serialNumber",
+    "productId",
+    "partNumber",
+    "softwareVersion",
+    "lastConnected",
+    "lastLowBatteryNotification",
+    "manufacturer",
+    "rechargeableSensorCapable",
+}
+
 # GMT datetime fields to rename and convert to UTC timezone
 # Maps: original GMT field name -> new clean field name
 DATETIME_FIELDS_GMT_RENAME = {
@@ -240,6 +260,7 @@ DATETIME_FIELDS_PARSE_UTC = {
     "updateDate",
     "createdDate",
     "lastUpdated",
+    "lastConnected",
 }
 
 # Local datetime fields to DROP (we use GMT/UTC versions instead)
@@ -337,6 +358,12 @@ def _convert_datetime_fields(data: dict[str, Any]) -> dict[str, Any]:
 def _trim_device(device: dict[str, Any]) -> dict[str, Any]:
     """Trim a registered device to essential fields only."""
     return {k: v for k, v in device.items() if k in DEVICE_ESSENTIAL_KEYS}
+
+
+def _trim_sensor(sensor: dict[str, Any]) -> dict[str, Any]:
+    """Trim and normalize a recent ANT+/BLE sensor payload."""
+    trimmed = {k: v for k, v in sensor.items() if k in SENSOR_ESSENTIAL_KEYS}
+    return _convert_datetime_fields(trimmed)
 
 
 def _is_cycling_activity(activity: dict[str, Any]) -> bool:
@@ -2678,12 +2705,12 @@ class GarminClient:
         }
 
     async def fetch_gear_data(self, timezone: str | None = None) -> dict[str, Any]:
-        """Fetch gear data: gear, defaults, stats, alarms, solar, devices.
+        """Fetch gear, Garmin devices and recently used ANT+/BLE sensors.
 
         API calls: get_gear, get_gear_defaults, get_gear_details×N
                    (legacy get_gear_stats fallback),
-                   get_devices, get_device_alarms, get_device_solar_data×N,
-                   get_device_last_used
+                   get_devices, get_sensors, get_device_alarms,
+                   get_device_solar_data×N, get_device_last_used
         """
         # Get user profile ID for gear API
         profile = await self._safe_call(self.get_user_profile)
@@ -2783,6 +2810,14 @@ class GarminClient:
         devices = await self._safe_call(self.get_devices) or []
         trimmed_devices = [_trim_device(d) for d in devices]
 
+        # Garmin Connect exposes recently used ANT+/BLE accessories separately
+        # from registered Garmin devices. The list carries battery level/status
+        # and last-connected time when the accessory reports them.
+        sensors = await self._safe_call(self.get_sensors) or []
+        trimmed_sensors = [
+            _trim_sensor(sensor) for sensor in sensors if isinstance(sensor, dict)
+        ]
+
         # Last used device / last sync time
         last_used_device = await self._safe_call(self.get_device_last_used) or {}
 
@@ -2829,6 +2864,7 @@ class GarminClient:
             "nextAlarm": next_alarms,
             "solarIntensity": solar_intensity,
             "devices": trimmed_devices,
+            "sensors": trimmed_sensors,
             "lastUsedDevice": last_used_device,
         }
 

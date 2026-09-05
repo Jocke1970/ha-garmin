@@ -1374,6 +1374,49 @@ class TestGarminClient:
             f"/gear-service/gear/v2/{gear_uuid}"
         )
 
+    async def test_fetch_gear_data_includes_recent_sensor_battery_data(self):
+        """Recent ANT+/BLE sensors are normalized into the gear coordinator."""
+        auth = _make_auth()
+        client = GarminClient(auth)
+        profile = MagicMock(profile_id=None)
+        sensor_payload = {
+            "deviceName": None,
+            "imageUrl": None,
+            "batteryStatus": "OK",
+            "batteryLevel": 75,
+            "sensorType": "HEART_RATE",
+            "prioritySensor": False,
+            "serialNumber": "123456",
+            "productId": None,
+            "partNumber": None,
+            "softwareVersion": "0.3",
+            "lastConnected": "2026-08-16T13:26:00.0",
+            "lastLowBatteryNotification": None,
+            "manufacturer": None,
+            "rechargeableSensorCapable": None,
+            "unexpectedField": "drop-me",
+        }
+
+        with (
+            patch.object(client, "get_user_profile", AsyncMock(return_value=profile)),
+            patch.object(client, "get_devices", AsyncMock(return_value=[])),
+            patch.object(
+                client, "get_sensors", AsyncMock(return_value=[sensor_payload])
+            ),
+            patch.object(client, "get_device_last_used", AsyncMock(return_value={})),
+            patch.object(client, "get_device_alarms", AsyncMock(return_value=[])),
+        ):
+            data = await client.fetch_gear_data()
+
+        assert len(data["sensors"]) == 1
+        sensor = data["sensors"][0]
+        assert sensor["sensorType"] == "HEART_RATE"
+        assert sensor["batteryLevel"] == 75
+        assert sensor["batteryStatus"] == "OK"
+        assert sensor["serialNumber"] == "123456"
+        assert sensor["lastConnected"] == datetime(2026, 8, 16, 13, 26, tzinfo=UTC)
+        assert "unexpectedField" not in sensor
+
     async def test_fetch_gear_data_prefers_v2_usage_metadata(self):
         """Gear fetch normalizes v2 usage while preserving rich metadata."""
         auth = _make_auth()
@@ -1423,6 +1466,7 @@ class TestGarminClient:
             patch.object(client, "get_gear_details", AsyncMock(return_value=details)),
             patch.object(client, "get_gear_stats", AsyncMock()) as legacy_stats,
             patch.object(client, "get_devices", AsyncMock(return_value=[])),
+            patch.object(client, "get_sensors", AsyncMock(return_value=[])),
             patch.object(client, "get_device_last_used", AsyncMock(return_value={})),
             patch.object(client, "get_device_alarms", AsyncMock(return_value=[])),
         ):
@@ -1466,6 +1510,7 @@ class TestGarminClient:
             patch.object(client, "get_gear_defaults", AsyncMock(return_value=[])),
             patch.object(client, "get_gear_details", AsyncMock(return_value=details)),
             patch.object(client, "get_devices", AsyncMock(return_value=[])),
+            patch.object(client, "get_sensors", AsyncMock(return_value=[])),
             patch.object(client, "get_device_last_used", AsyncMock(return_value={})),
             patch.object(client, "get_device_alarms", AsyncMock(return_value=[])),
         ):
@@ -1494,6 +1539,7 @@ class TestGarminClient:
                 client, "get_gear_stats", AsyncMock(return_value=legacy)
             ) as legacy_stats,
             patch.object(client, "get_devices", AsyncMock(return_value=[])),
+            patch.object(client, "get_sensors", AsyncMock(return_value=[])),
             patch.object(client, "get_device_last_used", AsyncMock(return_value={})),
             patch.object(client, "get_device_alarms", AsyncMock(return_value=[])),
         ):
