@@ -77,12 +77,16 @@ def build_daily_recovery_metrics(
 
     daily_sleep: dict[str, Any] = {}
     raw_daily_sleep = (sleep_raw or {}).get("dailySleepDTO")
-    if isinstance(raw_daily_sleep, dict) and _matches_date(raw_daily_sleep, target_date):
+    if isinstance(raw_daily_sleep, dict) and _matches_date(
+        raw_daily_sleep, target_date
+    ):
         daily_sleep = raw_daily_sleep
 
     hrv_summary: dict[str, Any] = {}
     raw_hrv_summary = (hrv_raw or {}).get("hrvSummary")
-    if isinstance(raw_hrv_summary, dict) and _matches_date(raw_hrv_summary, target_date):
+    if isinstance(raw_hrv_summary, dict) and _matches_date(
+        raw_hrv_summary, target_date
+    ):
         hrv_summary = raw_hrv_summary
 
     readiness = readiness_raw or {}
@@ -98,7 +102,9 @@ def build_daily_recovery_metrics(
         baseline = {}
 
     sleep_scores = daily_sleep.get("sleepScores") or {}
-    overall_sleep = sleep_scores.get("overall") if isinstance(sleep_scores, dict) else {}
+    overall_sleep = (
+        sleep_scores.get("overall") if isinstance(sleep_scores, dict) else {}
+    )
     if not isinstance(overall_sleep, dict):
         overall_sleep = {}
 
