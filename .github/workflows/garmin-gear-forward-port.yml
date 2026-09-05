@@ -1,0 +1,89 @@
+name: Garmin Gear forward-port
+
+on:
+  push:
+    branches: [feature/garmin-gear]
+    paths:
+      - .github/workflows/garmin-gear-forward-port.yml
+
+permissions:
+  contents: write
+
+jobs:
+  forward-port:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feature/garmin-gear
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Forward-port proven Gear changes only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main feature/preserve-activity-device-id
+
+          apply_commit_files() {
+            local commit="$1"
+            shift
+            echo "Applying $commit: $*"
+            git show --format= "$commit" -- "$@" | git apply --3way
+          }
+
+          # Dynamic activity-type registry and recent Gear activity tracking.
+          apply_commit_files f16c79662d3621270cec223a8b918a70a1ddcd25 src/ha_garmin/activity_types.py
+          apply_commit_files 3f62d1d57de7f0dd61972dad0743b75592e7ed0a src/ha_garmin/__init__.py tests/test_activity_types.py
+          apply_commit_files 6cf3411c19bca746676db527151773ed55abf5ad src/ha_garmin/activity_types.py
+          apply_commit_files c306082f632ddf5be67653de6ea91b95b8243001 tests/test_activity_types.py
+          apply_commit_files a1db083436cbcdb64a733017cbbbef18da3aab95 src/ha_garmin/activity_types.py tests/test_activity_types.py
+          apply_commit_files 281aff48030b64f4c780ea27caebbd8c12768c04 src/ha_garmin/activity_types.py tests/test_activity_types.py
+          apply_commit_files d110076ca21e2abe85a0bda6e647ac80a141b87c tests/test_activity_types.py
+          apply_commit_files 6758db7768bd0285952c0a5e5bddf450b7350889 src/ha_garmin/activity_types.py tests/test_activity_types.py
+          apply_commit_files 05c6781b35ab1d986c6276382356a4c5292c5332 src/ha_garmin/activity_types.py
+          apply_commit_files 9939c760b142c13b84a0458b57c9aadb2705ac38 tests/test_activity_types.py
+          apply_commit_files 0fc50ab6c42a674c0f6c894aee19dcc5ad3ccf87 src/ha_garmin/activity_types.py
+          apply_commit_files 04155365057465ef8754bbc527e5cf31de028f9a src/ha_garmin/activity_types.py
+          apply_commit_files 997fa7f600652bbc0c452b421eaffb5f4ba54203 tests/test_activity_types.py
+          apply_commit_files 32f12df3095c84102fdaef01a7ec539ed34db6e1 src/ha_garmin/activity_types.py
+          apply_commit_files c84b0a1498e8e6bc7623447e66b769f9b0feb643 tests/test_activity_types.py
+          apply_commit_files 0a147956f52c32ac5e2bff24d033ecfceb890393 src/ha_garmin/activity_types.py tests/test_activity_types.py
+
+          # Gear v2 usage/identity. Deliberately exclude temporary workflow files.
+          apply_commit_files 62fa3e06436c6059082c28a168e7008cb5fdd99c src/ha_garmin/const.py src/ha_garmin/client.py tests/test_client.py
+          apply_commit_files 92eea139aa2cdad86625e14886c7cb16dd199114 src/ha_garmin/client.py tests/test_client.py
+          apply_commit_files c88e9c962edfb8b8ca71652297898c11dc44a639 src/ha_garmin/client.py tests/test_client.py
+
+          # Preserve activity -> recording device identity.
+          apply_commit_files 3640e8ff0e9b46f14f496734983bff1d6ade5c2b src/ha_garmin/client.py tests/test_client.py
+
+          # Recent ANT+/BLE sensor battery data in normal Gear polling.
+          apply_commit_files a66423deb273a899a5c7582fea1253151fc68798 src/ha_garmin/client.py tests/test_client.py
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Validate forward-port
+        run: |
+          ruff format src tests
+          ruff check src tests
+          mypy src
+          pytest tests/test_client.py tests/test_activity_types.py -q
+
+      - name: Commit forward-port
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests
+          if git diff --cached --quiet; then
+            echo "No source changes to commit"
+            exit 0
+          fi
+          git commit -m "feat(gear): forward-port Garmin Gear runtime data"
+          git push origin HEAD:feature/garmin-gear
