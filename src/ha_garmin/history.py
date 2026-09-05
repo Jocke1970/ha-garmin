@@ -169,9 +169,10 @@ class GarminHistoryClient:
         summary_raw = await self.get_daily_summary(target_date)
         sleep_raw = await self.get_sleep_data(target_date)
         hrv_raw = await self.get_hrv_data(target_date)
-        readiness_raw, morning_readiness_raw = (
-            await self.get_training_readiness_entries(target_date)
-        )
+        (
+            readiness_raw,
+            morning_readiness_raw,
+        ) = await self.get_training_readiness_entries(target_date)
         return build_daily_recovery_metrics(
             target_date,
             summary_raw=summary_raw,
