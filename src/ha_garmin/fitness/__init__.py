@@ -14,8 +14,10 @@ from .focus import (
     LoadFocus,
     LoadFocusSummary,
     build_daily_load_focus_series,
+    build_load_focus_day,
     classify_activity_focus,
     classify_load_focus,
+    compute_load_focus_contribution,
 )
 from .load import (
     analyze_garmin_load_coverage,
@@ -77,6 +79,7 @@ __all__ = [
     "build_daily_load_focus_series",
     "build_daily_trimp_series",
     "build_garmin_training_history",
+    "build_load_focus_day",
     "build_training_history_from_daily_loads",
     "build_trimp_training_history",
     "calibrate_personal_trimp_max",
@@ -85,6 +88,7 @@ __all__ = [
     "compare_load_source_coverage",
     "compute_acwr",
     "compute_ctl_atl_tsb",
+    "compute_load_focus_contribution",
     "compute_ramp_rate",
     "compute_strain_score",
     "compute_trimp",
