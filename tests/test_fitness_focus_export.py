@@ -3,6 +3,7 @@ from datetime import date, timedelta
 import pytest
 
 from ha_garmin.fitness import (
+    build_daily_load_focus_series,
     build_training_history_from_daily_loads,
     classify_activity_focus,
     classify_load_focus,
@@ -75,6 +76,46 @@ def test_load_focus_excludes_missing_training_effect_without_turning_it_into_zer
 def test_load_focus_validates_dominance_ratio():
     with pytest.raises(ValueError, match="greater than 1"):
         classify_load_focus([_activity(1, 3.0, 1.0, 10.0)], dominance_ratio=1.0)
+
+
+def test_daily_load_focus_keeps_rest_days_and_splits_aerobic_te():
+    activities = [
+        _activity(1, 2.2, 0.3, None),
+        _activity(3, 3.4, 1.1, None),
+    ]
+
+    points = build_daily_load_focus_series(
+        activities,
+        date(2026, 8, 1),
+        date(2026, 8, 3),
+    )
+
+    assert len(points) == 3
+    assert points[0].complete is True
+    assert points[0].low_aerobic == 2.2
+    assert points[0].high_aerobic == 0.0
+    assert points[0].anaerobic == 0.3
+    assert points[1].activity_count == 0
+    assert points[1].complete is True
+    assert points[1].low_aerobic == 0.0
+    assert points[2].low_aerobic == 0.0
+    assert points[2].high_aerobic == 3.4
+    assert points[2].anaerobic == 1.1
+
+
+def test_daily_load_focus_preserves_incomplete_training_effect_day():
+    points = build_daily_load_focus_series(
+        [_activity(1, None, 0.3, None)],
+        date(2026, 8, 1),
+        date(2026, 8, 1),
+    )
+
+    assert points[0].activity_count == 1
+    assert points[0].covered_activities == 0
+    assert points[0].complete is False
+    assert points[0].low_aerobic is None
+    assert points[0].high_aerobic is None
+    assert points[0].anaerobic is None
 
 
 def test_export_rows_align_late_starting_acwr_and_ramp_rate():
