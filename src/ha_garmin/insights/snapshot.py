@@ -71,7 +71,11 @@ def build_insight_snapshot(
     activity_values = tuple(activities)
 
     training_point = next(
-        (point for point in training_history.training_points if point.date == target_date),
+        (
+            point
+            for point in training_history.training_points
+            if point.date == target_date
+        ),
         None,
     )
     acwr_point = next(
@@ -147,7 +151,15 @@ def build_insight_snapshot(
             if getattr(recovery, field_name) is None:
                 missing_fields.append(f"recovery.{field_name}")
 
-    for field_name in ("daily_load", "ctl", "atl", "tsb", "acwr", "ramp_rate", "strain"):
+    for field_name in (
+        "daily_load",
+        "ctl",
+        "atl",
+        "tsb",
+        "acwr",
+        "ramp_rate",
+        "strain",
+    ):
         if getattr(training, field_name) is None:
             missing_fields.append(f"training.{field_name}")
 
