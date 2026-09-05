@@ -214,6 +214,11 @@ DEVICE_ESSENTIAL_KEYS = {
     "primary",
     "primaryActivityTrackerIndicator",
     "deviceCategories",
+    "deviceTypePk",
+    "deviceTypeName",
+    "deviceStatus",
+    "currentFirmwareVersion",
+    "actualProductSku",
     "wifi",
 }
 

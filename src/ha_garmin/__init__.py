@@ -8,6 +8,7 @@ from .exceptions import (
     GarminMFARequired,
     GarminRateLimitError,
 )
+from .gear import GearItem, GearSourceRecord, build_gear_source_records
 from .history import GarminHistoryClient, TrimpTrainingContext
 
 __all__ = [
@@ -18,7 +19,10 @@ __all__ = [
     "GarminHistoryClient",
     "GarminMFARequired",
     "GarminRateLimitError",
+    "GearItem",
+    "GearSourceRecord",
     "TrimpTrainingContext",
+    "build_gear_source_records",
 ]
 
 __version__ = "0.1.38"

@@ -55,7 +55,9 @@ def test_source_identity_does_not_depend_on_display_name() -> None:
     first_record = build_gear_source_records({"gearStats": [first]})[0]
     second_record = build_gear_source_records({"gearStats": [renamed]})[0]
 
-    assert first_record["source_id"] == second_record["source_id"] == "garmin_gear:abc123"
+    assert (
+        first_record["source_id"] == second_record["source_id"] == "garmin_gear:abc123"
+    )
 
 
 def test_device_last_used_requires_exact_device_id_and_count_stays_unknown() -> None:

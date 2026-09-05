@@ -143,7 +143,7 @@ class GearItem(GarminModel):
         return _validate_category(value) if value is not None else None
 
     @model_validator(mode="after")
-    def validate_primary_membership(self) -> "GearItem":
+    def validate_primary_membership(self) -> GearItem:
         if (
             self.primary_category is not None
             and self.primary_category not in self.categories
@@ -177,13 +177,16 @@ def _gear_source(stat: dict[str, Any]) -> GearSourceRecord | None:
     if stat.get("gearPk") is not None:
         garmin_ids["gear_pk"] = int(stat["gearPk"])
 
-    last_activity = (
-        stat.get("lastActivity") if isinstance(stat.get("lastActivity"), dict) else {}
+    raw_last_activity = stat.get("lastActivity")
+    last_activity: dict[str, Any] = (
+        raw_last_activity if isinstance(raw_last_activity, dict) else {}
     )
     activity_count = _first_present(stat, "numActivitiesLinked", "totalActivities")
-    if isinstance(activity_count, bool) or not isinstance(activity_count, int | float):
-        activity_count = None
-    elif isinstance(activity_count, float) and not activity_count.is_integer():
+    if (
+        isinstance(activity_count, bool)
+        or not isinstance(activity_count, int | float)
+        or (isinstance(activity_count, float) and not activity_count.is_integer())
+    ):
         activity_count = None
     else:
         activity_count = int(activity_count)
@@ -193,9 +196,7 @@ def _gear_source(stat: dict[str, Any]) -> GearSourceRecord | None:
         "usage_type": stat.get("usageType"),
         "first_use_date": _first_present(stat, "firstUseDate", "dateBegin"),
         "days_used": stat.get("daysUsed"),
-        "distance_used_m": _first_present(
-            stat, "distanceUsedMeters", "totalDistance"
-        ),
+        "distance_used_m": _first_present(stat, "distanceUsedMeters", "totalDistance"),
         "duration_used_s": stat.get("durationUsedSeconds"),
         "max_distance_m": stat.get("maximumMeters"),
         "max_duration_s": stat.get("maxUsageDurationSeconds"),
@@ -255,11 +256,7 @@ def _device_source(
         ("part_number", "partNumber"),
     ):
         value = device.get(source)
-        if (
-            isinstance(value, str | int)
-            and not isinstance(value, bool)
-            and value != ""
-        ):
+        if isinstance(value, str | int) and not isinstance(value, bool) and value != "":
             garmin_ids[target] = value
     serial_hash = _private_hash(device.get("serialNumber"))
     if serial_hash:
@@ -315,11 +312,7 @@ def _sensor_source(sensor: dict[str, Any]) -> GearSourceRecord | None:
         ("part_number", "partNumber"),
     ):
         value = sensor.get(source)
-        if (
-            isinstance(value, str | int)
-            and not isinstance(value, bool)
-            and value != ""
-        ):
+        if isinstance(value, str | int) and not isinstance(value, bool) and value != "":
             garmin_ids[target] = value
 
     serial_hash = _private_hash(sensor.get("serialNumber"))
@@ -327,7 +320,9 @@ def _sensor_source(sensor: dict[str, Any]) -> GearSourceRecord | None:
         garmin_ids["serial_hash"] = serial_hash
 
     sensor_type = str(sensor.get("sensorType") or "unknown").lower()
-    name = _clean_text(sensor.get("deviceName")) or sensor_type.replace("_", " ").title()
+    name = (
+        _clean_text(sensor.get("deviceName")) or sensor_type.replace("_", " ").title()
+    )
     metadata = {
         "sensor_type": sensor.get("sensorType"),
         "battery_level": sensor.get("batteryLevel"),
@@ -369,9 +364,10 @@ def build_gear_source_records(
         if isinstance(stat, dict) and (record := _gear_source(stat)) is not None:
             records.append(record)
     for device in data.get("devices") or []:
-        if isinstance(device, dict) and (
-            record := _device_source(device, recent, last_used_device)
-        ) is not None:
+        if (
+            isinstance(device, dict)
+            and (record := _device_source(device, recent, last_used_device)) is not None
+        ):
             records.append(record)
     for sensor in data.get("sensors") or []:
         if isinstance(sensor, dict) and (record := _sensor_source(sensor)) is not None:
