@@ -74,6 +74,8 @@ jobs:
       - name: Validate M1 source model
         run: |
           ruff format src tests
+          ruff check --fix src tests
+          ruff format src tests
           ruff check src tests
           mypy src
           pytest -q
