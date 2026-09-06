@@ -81,6 +81,25 @@ def test_device_last_used_requires_exact_device_id_and_count_stays_unknown() -> 
     assert record["activity_count"] is None
 
 
+def test_device_battery_is_preserved_in_source_metadata() -> None:
+    data = {
+        "devices": [
+            {
+                "deviceId": 456,
+                "productDisplayName": "Fenix 7 Pro",
+                "batteryLevel": 61,
+                "batteryStatus": "GOOD",
+            }
+        ]
+    }
+
+    record = build_gear_source_records(data)[0]
+
+    assert record["source"] == "garmin_device"
+    assert record["metadata"]["battery_level"] == 61
+    assert record["metadata"]["battery_status"] == "GOOD"
+
+
 def test_sensor_serial_is_hashed_and_last_connected_is_last_seen_only() -> None:
     sensor = {
         "serialNumber": "SECRET-SERIAL",

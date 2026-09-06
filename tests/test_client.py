@@ -387,6 +387,24 @@ class TestGarminClient:
         assert devices[0]["displayName"] == "Forerunner 955"
         assert devices[0]["batteryLevel"] == 85
 
+    def test_trim_device_keeps_battery_fields(self):
+        """Registered-device trim must retain Garmin battery level and status."""
+        from ha_garmin.client import _trim_device
+
+        trimmed = _trim_device(
+            {
+                "deviceId": 123,
+                "displayName": "Fenix 7 Pro",
+                "batteryLevel": 67,
+                "batteryStatus": "GOOD",
+                "someCapabilityFlag": True,
+            }
+        )
+
+        assert trimmed["batteryLevel"] == 67
+        assert trimmed["batteryStatus"] == "GOOD"
+        assert "someCapabilityFlag" not in trimmed
+
     async def test_get_device_solar_data(self):
         """Test get_device_solar_data unwraps deviceSolarInput."""
         auth = _make_auth()

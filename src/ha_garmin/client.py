@@ -219,6 +219,8 @@ DEVICE_ESSENTIAL_KEYS = {
     "deviceStatus",
     "currentFirmwareVersion",
     "actualProductSku",
+    "batteryLevel",
+    "batteryStatus",
     "wifi",
 }
 

@@ -273,6 +273,8 @@ def _device_source(
         "device_type_name": device.get("deviceTypeName"),
         "device_categories": device.get("deviceCategories"),
         "firmware": device.get("currentFirmwareVersion"),
+        "battery_level": device.get("batteryLevel"),
+        "battery_status": device.get("batteryStatus"),
         "primary": device.get("primary"),
         "primary_activity_tracker": device.get("primaryActivityTrackerIndicator"),
         "image_url": device.get("imageUrl"),
