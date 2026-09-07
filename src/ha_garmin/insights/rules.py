@@ -75,7 +75,8 @@ def _data_quality_rule(snapshot: InsightSnapshot) -> InsightResult | None:
         for source in quality.missing_sources
     )
     evidence.extend(
-        InsightEvidence(code=f"missing_field.{field}") for field in quality.missing_fields
+        InsightEvidence(code=f"missing_field.{field}")
+        for field in quality.missing_fields
     )
     if not evidence:
         evidence.append(InsightEvidence(code="snapshot_incomplete"))
@@ -106,7 +107,9 @@ def _load_spike_rule(snapshot: InsightSnapshot) -> InsightResult | None:
     ]
     if training.ramp_rate is not None and training.ramp_rate > 0:
         evidence.append(
-            InsightEvidence(code="positive_ramp_rate", value=round(training.ramp_rate, 3))
+            InsightEvidence(
+                code="positive_ramp_rate", value=round(training.ramp_rate, 3)
+            )
         )
     if (
         training.atl is not None
@@ -114,14 +117,14 @@ def _load_spike_rule(snapshot: InsightSnapshot) -> InsightResult | None:
         and training.atl > training.ctl
     ):
         evidence.append(
-            InsightEvidence(code="atl_above_ctl", value=round(training.atl - training.ctl, 3))
+            InsightEvidence(
+                code="atl_above_ctl", value=round(training.atl - training.ctl, 3)
+            )
         )
 
     return _result(
         "load_spike",
-        severity=(
-            "warning" if training.acwr >= _ACWR_WARNING_THRESHOLD else "caution"
-        ),
+        severity=("warning" if training.acwr >= _ACWR_WARNING_THRESHOLD else "caution"),
         priority=95,
         confidence="high" if len(evidence) >= 2 else "medium",
         evidence=evidence,
@@ -152,7 +155,9 @@ def _low_recent_load_rule(snapshot: InsightSnapshot) -> InsightResult | None:
 
     if declining_ramp and training.ramp_rate is not None:
         evidence.append(
-            InsightEvidence(code="negative_ramp_rate", value=round(training.ramp_rate, 3))
+            InsightEvidence(
+                code="negative_ramp_rate", value=round(training.ramp_rate, 3)
+            )
         )
     if sparse_week:
         evidence.append(
@@ -195,7 +200,9 @@ def _hrv_negative_evidence(snapshot: InsightSnapshot) -> InsightEvidence | None:
     return None
 
 
-def _negative_recovery_evidence(snapshot: InsightSnapshot) -> tuple[InsightEvidence, ...]:
+def _negative_recovery_evidence(
+    snapshot: InsightSnapshot,
+) -> tuple[InsightEvidence, ...]:
     """Return independent exact-date recovery caution signals."""
     if not snapshot.data_quality.recovery_current:
         return ()
