@@ -24,14 +24,12 @@ _REQUIRED_RECOVERY_SOURCES = (
     ("summary", "summary_available"),
     ("sleep", "sleep_available"),
     ("hrv", "hrv_available"),
-    ("readiness", "readiness_available"),
 )
 
 _REQUIRED_RECOVERY_FIELDS = (
     "resting_hr",
     "hrv_last_night_avg",
     "sleep_score",
-    "training_readiness",
 )
 
 
@@ -147,9 +145,17 @@ def build_insight_snapshot(
         for source_name, attribute_name in _REQUIRED_RECOVERY_SOURCES:
             if not bool(getattr(recovery, attribute_name)):
                 missing_sources.append(source_name)
+        if not (recovery.readiness_available or recovery.morning_readiness_available):
+            missing_sources.append("readiness")
+
         for field_name in _REQUIRED_RECOVERY_FIELDS:
             if getattr(recovery, field_name) is None:
                 missing_fields.append(f"recovery.{field_name}")
+        if (
+            recovery.training_readiness is None
+            and recovery.morning_training_readiness is None
+        ):
+            missing_fields.append("recovery.training_readiness")
 
     for field_name in (
         "daily_load",
