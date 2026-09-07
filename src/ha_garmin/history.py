@@ -8,7 +8,7 @@ must receive data for the requested date range only.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
@@ -16,6 +16,7 @@ from .const import (
     ACTIVITIES_URL,
     RESTING_HEART_RATE_METRIC_ID,
     RESTING_HEART_RATE_METRIC_KEY,
+    TRAINING_READINESS_URL,
     USER_STATS_DAILY_URL,
 )
 from .exceptions import GarminAPIError, GarminAuthError, GarminConnectError
@@ -26,6 +27,7 @@ from .fitness import (
     build_trimp_training_history,
     normalize_activities,
 )
+from .insights import DailyRecoveryMetrics, build_daily_recovery_metrics
 
 if TYPE_CHECKING:
     from .client import GarminClient
@@ -82,6 +84,38 @@ def _trimp_inputs_ready(activity: dict[str, Any]) -> bool:
     )
 
 
+def _select_training_readiness_entries(
+    data: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split one exact-date readiness response into regular and morning entries."""
+    if not data:
+        return {}, {}
+
+    if isinstance(data, dict):
+        if data.get("inputContext") == "AFTER_WAKEUP_RESET":
+            return {}, data
+        return data, {}
+
+    if not isinstance(data, list):
+        raise GarminAPIError(
+            "Unexpected training-readiness history response: expected an object or list"
+        )
+    if not all(isinstance(item, dict) for item in data):
+        raise GarminAPIError(
+            "Unexpected training-readiness history response: list contained non-object items"
+        )
+
+    morning = next(
+        (item for item in data if item.get("inputContext") == "AFTER_WAKEUP_RESET"),
+        None,
+    )
+    regular = next(
+        (item for item in data if item.get("inputContext") != "AFTER_WAKEUP_RESET"),
+        None,
+    )
+    return regular or {}, morning or {}
+
+
 class GarminHistoryClient:
     """Historical Garmin API helper using an existing :class:`GarminClient`.
 
@@ -100,6 +134,76 @@ class GarminHistoryClient:
     async def get_daily_summary(self, target_date: date) -> dict[str, Any]:
         """Fetch exactly one Garmin daily summary without date fallback."""
         return await self._client._get_user_summary_raw(target_date)
+
+    async def get_sleep_data(self, target_date: date) -> dict[str, Any]:
+        """Fetch exactly one Garmin sleep payload without date fallback."""
+        return await self._client._get_sleep_data_raw(target_date)
+
+    async def get_hrv_data(self, target_date: date) -> dict[str, Any]:
+        """Fetch exactly one Garmin HRV payload without date fallback."""
+        return await self._client._get_hrv_data_raw(target_date)
+
+    async def get_training_readiness_entries(
+        self, target_date: date
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Fetch exact-date regular and morning readiness in one API request.
+
+        The display-oriented Garmin client may choose a convenient entry for UI
+        presentation. Strict history keeps the two contexts separate and never
+        substitutes the morning entry for regular readiness or vice versa.
+        """
+        url = f"{TRAINING_READINESS_URL}/{target_date.isoformat()}"
+        data = await self._client._request("GET", url)
+        return _select_training_readiness_entries(data)
+
+    async def fetch_daily_recovery_metrics(
+        self, target_date: date
+    ) -> DailyRecoveryMetrics:
+        """Fetch normalized recovery inputs for exactly one calendar day.
+
+        No adjacent-day fallback and no ``_safe_call`` are used here. API errors
+        therefore remain errors rather than being misclassified as missing
+        physiology, while a successful Garmin response with no measurement is
+        represented by ``None`` fields in :class:`DailyRecoveryMetrics`.
+        """
+        summary_raw = await self.get_daily_summary(target_date)
+        sleep_raw = await self.get_sleep_data(target_date)
+        hrv_raw = await self.get_hrv_data(target_date)
+        (
+            readiness_raw,
+            morning_readiness_raw,
+        ) = await self.get_training_readiness_entries(target_date)
+        return build_daily_recovery_metrics(
+            target_date,
+            summary_raw=summary_raw,
+            sleep_raw=sleep_raw,
+            hrv_raw=hrv_raw,
+            readiness_raw=readiness_raw,
+            morning_readiness_raw=morning_readiness_raw,
+        )
+
+    async def fetch_recovery_history(
+        self,
+        start_date: date,
+        end_date: date | None = None,
+    ) -> list[DailyRecoveryMetrics]:
+        """Return strict daily recovery records for an inclusive date range.
+
+        Requests are intentionally sequential. Recovery history touches several
+        Garmin endpoints per day, and avoiding burst concurrency is preferable
+        to trading API-rate-limit safety for faster backfill.
+        """
+        if end_date is None:
+            end_date = start_date
+        if start_date > end_date:
+            raise ValueError("start_date cannot be after end_date")
+
+        result: list[DailyRecoveryMetrics] = []
+        current = start_date
+        while current <= end_date:
+            result.append(await self.fetch_daily_recovery_metrics(current))
+            current += timedelta(days=1)
+        return result
 
     async def get_resting_heart_rate_range(
         self,
