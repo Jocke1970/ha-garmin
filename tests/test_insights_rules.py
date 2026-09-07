@@ -8,6 +8,7 @@ from ha_garmin.insights import (
     INSIGHT_RULESET_VERSION,
     DailyRecoveryMetrics,
     InsightDataQuality,
+    InsightResult,
     InsightSnapshot,
     LoadFocusSnapshot,
     TrainingSnapshot,
@@ -114,7 +115,7 @@ def _snapshot(
     )
 
 
-def _by_id(snapshot: InsightSnapshot) -> dict[str, object]:
+def _by_id(snapshot: InsightSnapshot) -> dict[str, InsightResult]:
     return {result.id: result for result in evaluate_insights(snapshot)}
 
 
