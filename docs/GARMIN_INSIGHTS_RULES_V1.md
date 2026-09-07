@@ -14,6 +14,21 @@ This is a transparent heuristic layer for training/recovery context. Thresholds
 are implementation heuristics to validate and tune against real account data;
 they are not medical limits and do not claim to predict injury or illness.
 
+## Readiness source semantics
+
+`DailyRecoveryMetrics` keeps regular Training Readiness and Garmin's
+`AFTER_WAKEUP_RESET`/morning Training Readiness as separate normalized fields.
+The strict recovery layer never rewrites one source as the other.
+
+For a current-day Insight snapshot, readiness coverage is considered available
+when either exact-date source is present. Rules prefer regular Training Readiness
+when available and otherwise use exact-date morning Training Readiness. Evidence
+keeps that provenance explicit through `training_readiness_*` versus
+`morning_training_readiness_*` codes.
+
+This avoids treating a normal current Garmin payload as incomplete merely because
+only the after-wakeup record exists, while still preserving the source boundary.
+
 ## Output contract
 
 Each result contains:
@@ -55,7 +70,7 @@ recalculate them.
 Priority 90. Requires current recovery data and at least two independent negative
 signals. Candidate signals are:
 
-- Training Readiness < 40
+- current Training Readiness < 40 (regular preferred, otherwise morning)
 - Sleep Score < 60
 - Body Battery < 30
 - average stress > 50
@@ -63,7 +78,7 @@ signals. Candidate signals are:
 - resting HR >= 5 bpm above the Garmin 7-day average
 - HRV below the balanced baseline, or Garmin HRV status `LOW`/`UNBALANCED`
 
-Four or more signals, or Training Readiness < 20, raises severity to warning.
+Four or more signals, or current readiness < 20, raises severity to warning.
 Multiple signals are required so one noisy metric does not generate a recovery
 warning by itself.
 
@@ -86,9 +101,10 @@ bucket.
 
 ### `favourable_training_signal`
 
-Priority 30. Requires current recovery data, Training Readiness >= 70 and Sleep
-Score >= 75, plus at least one additional positive signal from HRV, Body Battery,
-or resting HR relative to its 7-day average.
+Priority 30. Requires current recovery data, current Training Readiness >= 70
+(regular preferred, otherwise morning) and Sleep Score >= 75, plus at least one
+additional positive signal from HRV, Body Battery, or resting HR relative to its
+7-day average.
 
 This is deliberately a positive context signal, not a prescription for a specific
 workout.
