@@ -1,11 +1,16 @@
-"""Normalized models used by deterministic Garmin Insights inputs."""
+"""Normalized models used by deterministic Garmin Insights."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Literal
 
 from ..fitness.models import ActivityMetrics
+
+InsightSeverity = Literal["positive", "info", "caution", "warning"]
+InsightConfidence = Literal["low", "medium", "high"]
+InsightEvidenceValue = float | int | str
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,3 +112,30 @@ class InsightSnapshot:
     load_focus: LoadFocusSnapshot
     recent_activities: tuple[ActivityMetrics, ...]
     data_quality: InsightDataQuality
+
+
+@dataclass(frozen=True, slots=True)
+class InsightEvidence:
+    """One stable machine-readable reason behind an Insight result."""
+
+    code: str
+    value: InsightEvidenceValue | None = None
+    threshold: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InsightResult:
+    """Stable, presentation-neutral output from one deterministic Insight rule.
+
+    ``title_key`` and ``message_key`` are translation keys for the HA adapter;
+    user-facing prose is intentionally not owned by the library.
+    """
+
+    id: str
+    severity: InsightSeverity
+    priority: int
+    confidence: InsightConfidence
+    title_key: str
+    message_key: str
+    evidence: tuple[InsightEvidence, ...]
+    ruleset_version: int
