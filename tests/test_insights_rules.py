@@ -136,6 +136,41 @@ def test_favourable_training_signal_requires_multiple_current_inputs() -> None:
     }
 
 
+def test_morning_readiness_can_drive_rules_without_aliasing_regular_source() -> None:
+    recovery = replace(
+        _recovery(),
+        training_readiness=None,
+        readiness_available=False,
+        morning_training_readiness=92.0,
+        morning_readiness_available=True,
+        recovery_minutes=None,
+    )
+    results = _by_id(_snapshot(recovery=recovery))
+
+    favourable = results["favourable_training_signal"]
+    codes = {item.code for item in favourable.evidence}
+    assert "morning_training_readiness_good" in codes
+    assert "training_readiness_good" not in codes
+
+
+def test_morning_readiness_low_counts_as_recovery_signal_with_provenance() -> None:
+    recovery = replace(
+        _recovery(),
+        training_readiness=None,
+        readiness_available=False,
+        morning_training_readiness=30.0,
+        morning_readiness_available=True,
+        sleep_score=52.0,
+        recovery_minutes=None,
+    )
+    results = _by_id(_snapshot(recovery=recovery))
+
+    caution = results["recovery_caution"]
+    codes = {item.code for item in caution.evidence}
+    assert "morning_training_readiness_low" in codes
+    assert "training_readiness_low" not in codes
+
+
 def test_recovery_caution_requires_two_independent_negative_signals() -> None:
     recovery = replace(
         _recovery(),
