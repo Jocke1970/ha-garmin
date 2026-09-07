@@ -290,10 +290,8 @@ def _recovery_caution_rule(snapshot: InsightSnapshot) -> InsightResult | None:
         return None
 
     readiness = snapshot.recovery.training_readiness
-    severe = (
-        len(evidence) >= 4
-        or readiness is not None
-        and readiness < _READINESS_VERY_LOW_THRESHOLD
+    severe = len(evidence) >= 4 or (
+        readiness is not None and readiness < _READINESS_VERY_LOW_THRESHOLD
     )
     return _result(
         "recovery_caution",
