@@ -218,7 +218,7 @@ def test_recent_load_focus_imbalance_requires_complete_recent_te_window() -> Non
     assert imbalance.severity == "info"
     assert any(item.code == "dominant_focus.low_aerobic" for item in imbalance.evidence)
 
-    incomplete = activities + (_activity(4, aerobic=None, anaerobic=0.5),)
+    incomplete = (*activities, _activity(4, aerobic=None, anaerobic=0.5))
     incomplete_results = _by_id(_snapshot(activities=incomplete))
     assert "load_focus_imbalance" not in incomplete_results
 
