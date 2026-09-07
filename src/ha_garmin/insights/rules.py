@@ -60,6 +60,22 @@ def _result(
     )
 
 
+def _effective_readiness(snapshot: InsightSnapshot) -> tuple[float | None, str | None]:
+    """Return current readiness without collapsing source provenance.
+
+    Garmin may expose only the after-wakeup/morning readiness record for the
+    current date. Keep regular and morning values separate in the normalized
+    model, but let rules use the available current-day signal while retaining
+    which source produced the evidence.
+    """
+    recovery = snapshot.recovery
+    if recovery.training_readiness is not None:
+        return recovery.training_readiness, "training_readiness"
+    if recovery.morning_training_readiness is not None:
+        return recovery.morning_training_readiness, "morning_training_readiness"
+    return None, None
+
+
 def _data_quality_rule(snapshot: InsightSnapshot) -> InsightResult | None:
     """Surface incomplete/stale inputs without pretending missing values are safe."""
     quality = snapshot.data_quality
@@ -210,14 +226,12 @@ def _negative_recovery_evidence(
     recovery = snapshot.recovery
     evidence: list[InsightEvidence] = []
 
-    if (
-        recovery.training_readiness is not None
-        and recovery.training_readiness < _READINESS_LOW_THRESHOLD
-    ):
+    readiness, readiness_source = _effective_readiness(snapshot)
+    if readiness is not None and readiness < _READINESS_LOW_THRESHOLD:
         evidence.append(
             InsightEvidence(
-                code="training_readiness_low",
-                value=round(recovery.training_readiness, 1),
+                code=f"{readiness_source}_low",
+                value=round(readiness, 1),
                 threshold=_READINESS_LOW_THRESHOLD,
             )
         )
@@ -289,7 +303,7 @@ def _recovery_caution_rule(snapshot: InsightSnapshot) -> InsightResult | None:
     if len(evidence) < _RECOVERY_CAUTION_SIGNAL_COUNT:
         return None
 
-    readiness = snapshot.recovery.training_readiness
+    readiness, _readiness_source = _effective_readiness(snapshot)
     severe = len(evidence) >= 4 or (
         readiness is not None and readiness < _READINESS_VERY_LOW_THRESHOLD
     )
@@ -329,9 +343,10 @@ def _favourable_training_rule(snapshot: InsightSnapshot) -> InsightResult | None
         return None
 
     recovery = snapshot.recovery
+    readiness, readiness_source = _effective_readiness(snapshot)
     if (
-        recovery.training_readiness is None
-        or recovery.training_readiness < _READINESS_GOOD_THRESHOLD
+        readiness is None
+        or readiness < _READINESS_GOOD_THRESHOLD
         or recovery.sleep_score is None
         or recovery.sleep_score < _SLEEP_GOOD_THRESHOLD
     ):
@@ -339,8 +354,8 @@ def _favourable_training_rule(snapshot: InsightSnapshot) -> InsightResult | None
 
     evidence = [
         InsightEvidence(
-            code="training_readiness_good",
-            value=round(recovery.training_readiness, 1),
+            code=f"{readiness_source}_good",
+            value=round(readiness, 1),
             threshold=_READINESS_GOOD_THRESHOLD,
         ),
         InsightEvidence(
