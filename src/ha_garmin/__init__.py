@@ -10,8 +10,10 @@ from .exceptions import (
 )
 from .gear import GearItem, GearSourceRecord, build_gear_source_records
 from .history import GarminHistoryClient, TrimpTrainingContext
+from .insights import DailyRecoveryMetrics, InsightSnapshot, build_insight_snapshot
 
 __all__ = [
+    "DailyRecoveryMetrics",
     "GarminAuth",
     "GarminAuthError",
     "GarminClient",
@@ -21,8 +23,10 @@ __all__ = [
     "GarminRateLimitError",
     "GearItem",
     "GearSourceRecord",
+    "InsightSnapshot",
     "TrimpTrainingContext",
     "build_gear_source_records",
+    "build_insight_snapshot",
 ]
 
 __version__ = "0.1.38"
