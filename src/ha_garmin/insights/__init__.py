@@ -16,8 +16,8 @@ from .rules import INSIGHT_RULESET_VERSION, evaluate_insights
 from .snapshot import build_insight_snapshot
 
 __all__ = [
-    "DailyRecoveryMetrics",
     "INSIGHT_RULESET_VERSION",
+    "DailyRecoveryMetrics",
     "InsightConfidence",
     "InsightDataQuality",
     "InsightEvidence",
