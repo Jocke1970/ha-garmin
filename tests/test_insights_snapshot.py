@@ -1,5 +1,6 @@
 """Tests for canonical deterministic InsightSnapshot input."""
 
+from dataclasses import replace
 from datetime import UTC, date, datetime
 
 import pytest
@@ -145,6 +146,30 @@ def test_build_insight_snapshot_complete_exact_date() -> None:
     assert snapshot.data_quality.complete is True
     assert snapshot.data_quality.missing_fields == ()
     assert snapshot.data_quality.stale_fields == ()
+
+
+def test_morning_readiness_satisfies_current_readiness_coverage() -> None:
+    day = date(2026, 9, 5)
+    recovery = replace(
+        _recovery(day),
+        training_readiness=None,
+        readiness_available=False,
+        morning_training_readiness=92.0,
+        morning_readiness_available=True,
+        recovery_minutes=None,
+    )
+
+    snapshot = build_insight_snapshot(
+        datetime(2026, 9, 5, 8, tzinfo=UTC),
+        recovery=recovery,
+        training_history=_history(day),
+    )
+
+    assert snapshot.recovery.training_readiness is None
+    assert snapshot.recovery.morning_training_readiness == 92.0
+    assert "readiness" not in snapshot.data_quality.missing_sources
+    assert "recovery.training_readiness" not in snapshot.data_quality.missing_fields
+    assert snapshot.data_quality.complete is True
 
 
 def test_stale_recovery_is_carried_but_explicitly_flagged() -> None:
