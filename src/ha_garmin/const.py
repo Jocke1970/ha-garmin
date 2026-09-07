@@ -70,6 +70,7 @@ BADGES_URL = f"{GARMIN_CONNECT_API}/badge-service/badge/earned"
 # Gear endpoints
 GEAR_URL = f"{GARMIN_CONNECT_API}/gear-service/gear/filterGear"
 GEAR_BASE_URL = f"{GARMIN_CONNECT_API}/gear-service/gear"
+GEAR_V2_URL = f"{GARMIN_CONNECT_API}/gear-service/gear/v2"
 GEAR_STATS_URL = f"{GARMIN_CONNECT_API}/gear-service/gear/stats"
 GEAR_DEFAULTS_URL = f"{GARMIN_CONNECT_API}/gear-service/gear/user"
 
