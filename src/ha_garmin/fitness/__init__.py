@@ -1,5 +1,13 @@
 """Garmin Fitness normalization and calculation primitives."""
 
+from .activity_evaluation import (
+    ActivityDetailSample,
+    ActivityEvaluation,
+    EvaluationConfidence,
+    best_mean_power,
+    evaluate_activity,
+    parse_activity_detail_samples,
+)
 from .const import CANONICAL_LOAD_SOURCE, GARMIN_FITNESS_ALGORITHM_VERSION
 from .diagnostics import (
     ActivityTypeCoverage,
@@ -53,11 +61,14 @@ from .trimp import (
 __all__ = [
     "CANONICAL_LOAD_SOURCE",
     "GARMIN_FITNESS_ALGORITHM_VERSION",
+    "ActivityDetailSample",
+    "ActivityEvaluation",
     "ActivityMetrics",
     "ActivityTypeCoverage",
     "AcwrPoint",
     "DailyLoad",
     "DailyLoadFocus",
+    "EvaluationConfidence",
     "GarminLoadCoverage",
     "GarminTrainingHistory",
     "LoadFocus",
@@ -75,6 +86,7 @@ __all__ = [
     "analyze_trimp_history_context",
     "analyze_trimp_input_coverage",
     "assess_daily_load_series",
+    "best_mean_power",
     "build_daily_garmin_load_series",
     "build_daily_load_focus_series",
     "build_daily_trimp_series",
@@ -93,7 +105,9 @@ __all__ = [
     "compute_strain_score",
     "compute_trimp",
     "count_consecutive_hard_days",
+    "evaluate_activity",
     "export_training_history_rows",
     "normalize_activities",
     "normalize_activity",
+    "parse_activity_detail_samples",
 ]
