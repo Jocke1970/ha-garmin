@@ -9,6 +9,12 @@ from .activity_evaluation import (
     parse_activity_detail_samples,
 )
 from .const import CANONICAL_LOAD_SOURCE, GARMIN_FITNESS_ALGORITHM_VERSION
+from .daily_budget import (
+    DAILY_LOAD_BUDGET_POLICY_VERSION,
+    DailyLoadBudget,
+    ProjectedTrainingState,
+    recommend_daily_load_budget,
+)
 from .diagnostics import (
     ActivityTypeCoverage,
     LoadSourceCoverageComparison,
@@ -60,6 +66,7 @@ from .trimp import (
 
 __all__ = [
     "CANONICAL_LOAD_SOURCE",
+    "DAILY_LOAD_BUDGET_POLICY_VERSION",
     "GARMIN_FITNESS_ALGORITHM_VERSION",
     "ActivityDetailSample",
     "ActivityEvaluation",
@@ -67,6 +74,7 @@ __all__ = [
     "ActivityTypeCoverage",
     "AcwrPoint",
     "DailyLoad",
+    "DailyLoadBudget",
     "DailyLoadFocus",
     "EvaluationConfidence",
     "GarminLoadCoverage",
@@ -75,6 +83,7 @@ __all__ = [
     "LoadFocusSummary",
     "LoadSeriesAssessment",
     "LoadSourceCoverageComparison",
+    "ProjectedTrainingState",
     "RampRatePoint",
     "Sex",
     "TrainingHistoryExportRow",
@@ -110,4 +119,5 @@ __all__ = [
     "normalize_activities",
     "normalize_activity",
     "parse_activity_detail_samples",
+    "recommend_daily_load_budget",
 ]
