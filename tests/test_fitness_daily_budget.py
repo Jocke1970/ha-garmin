@@ -121,6 +121,20 @@ def test_budget_never_recommends_negative_remaining_load_after_limit_is_exceeded
     assert budget.structural_limiting_factor == "tsb"
 
 
+def test_exhausted_fractional_budget_never_rounds_below_completed_load() -> None:
+    budget = recommend_daily_load_budget(
+        _history(today_load=80.06),
+        personal_trimp_max=250.0,
+        insight_result_ids=("recovery_caution",),
+    )
+
+    assert budget.current_load == 80.1
+    assert budget.structural_remaining_load == 0.0
+    assert budget.recommended_max_load == 80.1
+    assert budget.remaining_load == 0.0
+    assert budget.limiting_factor == budget.structural_limiting_factor
+
+
 def test_budget_requires_complete_training_history() -> None:
     history = build_training_history_from_daily_loads(
         "trimp",
