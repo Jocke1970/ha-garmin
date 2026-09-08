@@ -79,7 +79,9 @@ async def test_fetch_trimp_training_context_reuses_strict_history_inputs() -> No
     assert context.history.daily_loads[1].load is not None
 
 
-async def test_fetch_trimp_training_context_uses_exact_day_summary_rhr_fallback() -> None:
+async def test_fetch_trimp_training_context_uses_exact_day_summary_rhr_fallback() -> (
+    None
+):
     client = _make_client()
     history = GarminHistoryClient(client)
     start = date(2026, 9, 1)
