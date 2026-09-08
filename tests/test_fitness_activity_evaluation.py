@@ -122,8 +122,7 @@ def test_short_aerobic_activity_remains_valid_without_performance_estimate() -> 
 
 def test_non_cycling_activity_never_invents_cycling_estimates() -> None:
     samples = tuple(
-        ActivityDetailSample(float(second), 300.0, 175.0)
-        for second in range(1501)
+        ActivityDetailSample(float(second), 300.0, 175.0) for second in range(1501)
     )
 
     result = evaluate_activity(
