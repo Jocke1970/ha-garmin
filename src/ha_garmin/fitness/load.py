@@ -8,6 +8,34 @@ from typing import Any
 
 from .models import ActivityMetrics, DailyLoad, GarminLoadCoverage
 
+_SHADOW_START_TOLERANCE = timedelta(minutes=2)
+_SHADOW_DURATION_TOLERANCE_MINUTES = 1.0
+_ACTIVITY_FAMILIES: dict[str, str] = {
+    "cycling": "cycling",
+    "road_biking": "cycling",
+    "virtual_ride": "cycling",
+    "indoor_cycling": "cycling",
+    "mountain_biking": "cycling",
+    "gravel_cycling": "cycling",
+    "e_bike_fitness": "cycling",
+    "e_bike_mountain": "cycling",
+    "running": "running",
+    "virtual_run": "running",
+    "treadmill_running": "running",
+    "trail_running": "running",
+    "track_running": "running",
+    "rowing": "rowing",
+    "rowing_v2": "rowing",
+    "indoor_rowing": "rowing",
+    "walking": "walking",
+    "hiking": "walking",
+    "strength": "strength",
+    "strength_training": "strength",
+    "swimming": "swimming",
+    "lap_swimming": "swimming",
+    "open_water_swimming": "swimming",
+}
+
 
 def _number(value: Any) -> float | None:
     """Return a finite numeric value as float, otherwise None."""
@@ -126,15 +154,78 @@ def _activity_quality(activity: ActivityMetrics) -> tuple[int, int]:
     return populated, int(activity.duration_minutes > 0)
 
 
+def _activity_family(activity_type: str) -> str:
+    """Return a conservative activity family for duplicate-session matching."""
+    return _ACTIVITY_FAMILIES.get(activity_type, activity_type)
+
+
+def _trimp_inputs_ready(activity: ActivityMetrics) -> bool:
+    """Return whether one normalized activity can contribute TRIMP."""
+    return activity.avg_hr is not None and activity.duration_minutes > 0
+
+
+def _same_shadow_session(left: ActivityMetrics, right: ActivityMetrics) -> bool:
+    """Return whether two IDs look like the same cross-service activity session.
+
+    Some connected services create a second Garmin activity record for a workout
+    that already exists. The shadow often has a new activity ID but no heart-rate
+    data. Only near-identical sessions in the same activity family are considered,
+    and suppression is allowed only when exactly one copy has the TRIMP inputs.
+    """
+    if left.calendar_date != right.calendar_date:
+        return False
+    if _activity_family(left.activity_type) != _activity_family(right.activity_type):
+        return False
+    if _trimp_inputs_ready(left) == _trimp_inputs_ready(right):
+        return False
+
+    left_start = left.start_time.replace(tzinfo=None)
+    right_start = right.start_time.replace(tzinfo=None)
+    if abs(left_start - right_start) > _SHADOW_START_TOLERANCE:
+        return False
+
+    if left.duration_minutes <= 0 or right.duration_minutes <= 0:
+        return False
+    return (
+        abs(left.duration_minutes - right.duration_minutes)
+        <= _SHADOW_DURATION_TOLERANCE_MINUTES
+    )
+
+
+def _suppress_incomplete_shadow_sessions(
+    activities: Iterable[ActivityMetrics],
+) -> list[ActivityMetrics]:
+    """Keep the TRIMP-capable copy of a near-identical duplicate session."""
+    kept: list[ActivityMetrics] = []
+    for activity in activities:
+        shadow_index = next(
+            (
+                index
+                for index, existing in enumerate(kept)
+                if _same_shadow_session(existing, activity)
+            ),
+            None,
+        )
+        if shadow_index is None:
+            kept.append(activity)
+            continue
+
+        existing = kept[shadow_index]
+        if _trimp_inputs_ready(activity) and not _trimp_inputs_ready(existing):
+            kept[shadow_index] = activity
+    return kept
+
+
 def normalize_activities(
     activities: Iterable[dict[str, Any]],
 ) -> list[ActivityMetrics]:
-    """Normalize and deduplicate activities by Garmin activity ID.
+    """Normalize and conservatively deduplicate Garmin activities.
 
-    When duplicate records exist, prefer the richer copy. Garmin can briefly
-    expose a newly synced activity before all derived fields (for example
-    Training Load) have propagated, so keeping the first copy can permanently
-    preserve a poorer snapshot during paginated/backfill retrieval.
+    Same-ID duplicates prefer the richer copy. Distinct IDs are normally kept,
+    except when two near-identical sessions in the same activity family overlap
+    and exactly one lacks TRIMP inputs. That pattern is treated as a cross-service
+    shadow record so an incomplete import cannot invalidate an otherwise complete
+    Fitness day or be double-counted beside the real recorded workout.
     """
     by_id: dict[int, ActivityMetrics] = {}
     for raw in activities:
@@ -144,7 +235,8 @@ def normalize_activities(
             existing
         ):
             by_id[normalized.activity_id] = normalized
-    return sorted(
+
+    ordered = sorted(
         by_id.values(),
         key=lambda item: (
             item.calendar_date,
@@ -152,6 +244,7 @@ def normalize_activities(
             item.activity_id,
         ),
     )
+    return _suppress_incomplete_shadow_sessions(ordered)
 
 
 def analyze_garmin_load_coverage(
