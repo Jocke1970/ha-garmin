@@ -101,7 +101,9 @@ def _metric(metrics: list[Any], index: int | None) -> float | None:
     return _finite_number(metrics[index])
 
 
-def parse_activity_detail_samples(details: dict[str, Any]) -> tuple[ActivityDetailSample, ...]:
+def parse_activity_detail_samples(
+    details: dict[str, Any],
+) -> tuple[ActivityDetailSample, ...]:
     """Decode timestamp, power and HR without relying on fixed metric positions.
 
     Garmin returns ``activityDetailMetrics`` as positional arrays whose indexes
@@ -340,9 +342,7 @@ def _combined_confidence(
 ) -> EvaluationConfidence:
     """Return a conservative combined confidence across available estimates."""
     available = [
-        value
-        for value in (vo2_confidence, ftp_confidence)
-        if value != "unavailable"
+        value for value in (vo2_confidence, ftp_confidence) if value != "unavailable"
     ]
     if not available:
         return "unavailable"
