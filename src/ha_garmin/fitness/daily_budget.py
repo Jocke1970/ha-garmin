@@ -299,12 +299,15 @@ def recommend_daily_load_budget(
 
     modifier, modifier_reason = _recovery_modifier(insight_result_ids)
     recommended_remaining = structural_remaining * modifier
+    # Quantize only a reduced *additional* capacity. With no recovery reduction,
+    # preserve the structural ceiling exactly; flooring the total could otherwise
+    # make an already completed fractional load appear lower than reality.
+    if modifier < 1.0:
+        recommended_remaining = math.floor(recommended_remaining * 10.0) / 10.0
     recommended_max = current_load + recommended_remaining
-    recommended_max = math.floor(recommended_max * 10.0) / 10.0
-    recommended_remaining = max(0.0, recommended_max - current_load)
 
     limiting_factor: BudgetLimitingFactor
-    if modifier_reason != "none" and recommended_max < structural_max:
+    if modifier_reason != "none" and recommended_remaining < structural_remaining:
         limiting_factor = modifier_reason
     else:
         limiting_factor = structural_factor
