@@ -106,7 +106,9 @@ def test_favourable_insight_never_raises_structural_cap() -> None:
     assert favourable.remaining_load == baseline.structural_remaining_load
 
 
-def test_budget_never_recommends_negative_remaining_load_after_limit_is_exceeded() -> None:
+def test_budget_never_recommends_negative_remaining_load_after_limit_is_exceeded() -> (
+    None
+):
     budget = recommend_daily_load_budget(
         _history(today_load=80.0),
         personal_trimp_max=250.0,
