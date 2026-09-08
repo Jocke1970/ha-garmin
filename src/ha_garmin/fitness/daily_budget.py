@@ -118,9 +118,7 @@ def _project(
     current = simulated.training_points[-1]
     acwr = simulated.acwr_points[-1].acwr if simulated.acwr_points else None
     ramp_rate = (
-        simulated.ramp_rate_points[-1].ramp_rate
-        if simulated.ramp_rate_points
-        else None
+        simulated.ramp_rate_points[-1].ramp_rate if simulated.ramp_rate_points else None
     )
     return ProjectedTrainingState(
         total_load=round(total_load, 3),
