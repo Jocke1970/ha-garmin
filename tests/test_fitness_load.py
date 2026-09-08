@@ -86,6 +86,84 @@ def test_normalize_activities_prefers_richer_duplicate():
     assert activity.aerobic_training_effect == 1.4
 
 
+def test_normalize_activities_suppresses_incomplete_shadow_session():
+    raw = [
+        {
+            "activityId": 24288573558,
+            "calendarDate": "2026-09-07",
+            "startTimeLocal": "2026-09-07T17:27:00",
+            "activityType": {"typeKey": "cycling"},
+            "duration": 420,
+        },
+        {
+            "activityId": 24272779145,
+            "calendarDate": "2026-09-07",
+            "startTimeLocal": "2026-09-07T17:27:32",
+            "activityType": {"typeKey": "virtual_ride"},
+            "duration": 427,
+            "averageHR": 126,
+            "maxHR": 154,
+            "activityTrainingLoad": 29.139,
+            "aerobicTrainingEffect": 2.3,
+            "anaerobicTrainingEffect": 0.4,
+        },
+    ]
+
+    normalized = normalize_activities(raw)
+
+    assert [item.activity_id for item in normalized] == [24272779145]
+    assert normalized[0].avg_hr == 126.0
+
+
+def test_normalize_activities_keeps_two_complete_overlapping_sessions():
+    raw = [
+        {
+            "activityId": 1,
+            "calendarDate": "2026-09-07",
+            "startTimeLocal": "2026-09-07T17:27:00",
+            "activityType": {"typeKey": "cycling"},
+            "duration": 420,
+            "averageHR": 120,
+        },
+        {
+            "activityId": 2,
+            "calendarDate": "2026-09-07",
+            "startTimeLocal": "2026-09-07T17:27:30",
+            "activityType": {"typeKey": "virtual_ride"},
+            "duration": 425,
+            "averageHR": 126,
+        },
+    ]
+
+    normalized = normalize_activities(raw)
+
+    assert [item.activity_id for item in normalized] == [1, 2]
+
+
+def test_normalize_activities_keeps_close_sessions_from_different_families():
+    raw = [
+        {
+            "activityId": 1,
+            "calendarDate": "2026-09-07",
+            "startTimeLocal": "2026-09-07T17:27:00",
+            "activityType": {"typeKey": "cycling"},
+            "duration": 420,
+        },
+        {
+            "activityId": 2,
+            "calendarDate": "2026-09-07",
+            "startTimeLocal": "2026-09-07T17:27:30",
+            "activityType": {"typeKey": "running"},
+            "duration": 425,
+            "averageHR": 126,
+        },
+    ]
+
+    normalized = normalize_activities(raw)
+
+    assert [item.activity_id for item in normalized] == [1, 2]
+
+
 def test_load_coverage_distinguishes_missing_from_zero():
     activities = normalize_activities(
         [
