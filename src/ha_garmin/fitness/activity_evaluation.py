@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 from collections import deque
 from dataclasses import dataclass
+from itertools import pairwise
 from statistics import median
 from typing import Any, Literal
 
@@ -199,7 +200,7 @@ def best_mean_power(
 
     gaps = [
         current[0] - previous[0]
-        for previous, current in zip(power_points, power_points[1:], strict=False)
+        for previous, current in pairwise(power_points)
         if current[0] > previous[0]
     ]
     typical_gap = median(gaps) if gaps else 1.0
