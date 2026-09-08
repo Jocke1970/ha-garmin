@@ -52,6 +52,11 @@ async def test_fetch_trimp_training_context_reuses_strict_history_inputs() -> No
             new_callable=AsyncMock,
             return_value={date(2026, 9, 2): 50.0},
         ) as rhr_fetch,
+        patch.object(
+            history,
+            "get_daily_summary",
+            new_callable=AsyncMock,
+        ) as summary_fetch,
     ):
         context = await history.fetch_trimp_training_context(
             start,
@@ -62,6 +67,7 @@ async def test_fetch_trimp_training_context_reuses_strict_history_inputs() -> No
 
     activity_fetch.assert_awaited_once_with(start, end)
     rhr_fetch.assert_awaited_once_with(start, end)
+    summary_fetch.assert_not_awaited()
     assert isinstance(context, TrimpTrainingContext)
     assert len(context.activities) == 1
     assert context.resting_hr_by_date == {date(2026, 9, 2): 50.0}
@@ -71,6 +77,91 @@ async def test_fetch_trimp_training_context_reuses_strict_history_inputs() -> No
     assert len(context.history.daily_loads) == 2
     assert context.history.daily_loads[0].load == 0.0
     assert context.history.daily_loads[1].load is not None
+
+
+async def test_fetch_trimp_training_context_uses_exact_day_summary_rhr_fallback() -> (
+    None
+):
+    client = _make_client()
+    history = GarminHistoryClient(client)
+    start = date(2026, 9, 1)
+    end = date(2026, 9, 2)
+
+    with (
+        patch.object(
+            history,
+            "get_activities_by_date",
+            new_callable=AsyncMock,
+            return_value=[_raw_activity()],
+        ),
+        patch.object(
+            history,
+            "get_resting_heart_rate_range",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch.object(
+            history,
+            "get_daily_summary",
+            new_callable=AsyncMock,
+            return_value={
+                "calendarDate": "2026-09-02",
+                "restingHeartRate": 47,
+            },
+        ) as summary_fetch,
+    ):
+        context = await history.fetch_trimp_training_context(
+            start,
+            end,
+            user_max_hr=175,
+            sex="male",
+        )
+
+    summary_fetch.assert_awaited_once_with(end)
+    assert context.resting_hr_by_date == {end: 47.0}
+    assert context.history.assessment.ready is True
+    assert context.history.daily_loads[-1].load is not None
+
+
+async def test_fetch_trimp_training_context_rejects_mismatched_summary_rhr() -> None:
+    client = _make_client()
+    history = GarminHistoryClient(client)
+    start = date(2026, 9, 1)
+    end = date(2026, 9, 2)
+
+    with (
+        patch.object(
+            history,
+            "get_activities_by_date",
+            new_callable=AsyncMock,
+            return_value=[_raw_activity()],
+        ),
+        patch.object(
+            history,
+            "get_resting_heart_rate_range",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch.object(
+            history,
+            "get_daily_summary",
+            new_callable=AsyncMock,
+            return_value={
+                "calendarDate": "2026-09-01",
+                "restingHeartRate": 47,
+            },
+        ),
+    ):
+        context = await history.fetch_trimp_training_context(
+            start,
+            end,
+            user_max_hr=175,
+            sex="male",
+        )
+
+    assert context.resting_hr_by_date == {}
+    assert context.history.assessment.ready is False
+    assert context.history.daily_loads[-1].load is None
 
 
 async def test_fetch_trimp_training_history_delegates_to_context() -> None:

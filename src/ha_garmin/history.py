@@ -84,6 +84,21 @@ def _trimp_inputs_ready(activity: dict[str, Any]) -> bool:
     )
 
 
+def _summary_matches_date(payload: dict[str, Any], target_date: date) -> bool:
+    """Return whether an exact-day summary belongs to the requested date."""
+    raw_date = payload.get("calendarDate")
+    if raw_date is None:
+        return True
+    if isinstance(raw_date, date):
+        return raw_date == target_date
+    if isinstance(raw_date, str):
+        try:
+            return date.fromisoformat(raw_date[:10]) == target_date
+        except ValueError:
+            return False
+    return False
+
+
 def _select_training_readiness_entries(
     data: Any,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -276,6 +291,37 @@ class GarminHistoryClient:
                 result[measurement_date] = value
         return result
 
+    async def _supplement_terminal_resting_hr(
+        self,
+        resting_hr: dict[date, float],
+        target_date: date,
+    ) -> None:
+        """Fill one missing terminal-day RHR from the exact daily summary.
+
+        Garmin's historical user-stats metric can lag behind the same day's
+        summary endpoint. This fallback remains strict: only the requested date
+        is accepted, adjacent-day values are never substituted, and API failure
+        simply leaves the historical gap visible.
+        """
+        if target_date in resting_hr:
+            return
+
+        try:
+            summary = await self.get_daily_summary(target_date)
+        except GarminAuthError:
+            raise
+        except GarminConnectError:
+            return
+
+        if not isinstance(summary, dict) or not _summary_matches_date(
+            summary, target_date
+        ):
+            return
+
+        value = _number(summary.get("restingHeartRate"))
+        if value is not None and value > 0:
+            resting_hr[target_date] = value
+
     async def get_activities_by_date(
         self,
         start_date: date,
@@ -403,6 +449,10 @@ class GarminHistoryClient:
         await self._enrich_trimp_activity_inputs(raw)
         activities = tuple(normalize_activities(raw))
         resting_hr = await self.get_resting_heart_rate_range(start_date, end_date)
+        if end_date not in resting_hr and any(
+            activity.calendar_date == end_date for activity in activities
+        ):
+            await self._supplement_terminal_resting_hr(resting_hr, end_date)
         history = build_trimp_training_history(
             activities,
             start_date,
