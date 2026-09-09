@@ -115,6 +115,45 @@ def test_normalize_activities_suppresses_incomplete_shadow_session():
     assert normalized[0].avg_hr == 126.0
 
 
+def test_normalize_activities_suppresses_repeated_shadow_session_cluster():
+    shadow_ids = [
+        24288573558,
+        24301284096,
+        24301355648,
+        24295765811,
+        24298509452,
+    ]
+    raw = [
+        *[
+            {
+                "activityId": activity_id,
+                "calendarDate": "2026-09-07",
+                "startTimeLocal": "2026-09-07T17:27:00",
+                "activityType": {"typeKey": "cycling"},
+                "duration": 420,
+            }
+            for activity_id in shadow_ids
+        ],
+        {
+            "activityId": 24272779145,
+            "calendarDate": "2026-09-07",
+            "startTimeLocal": "2026-09-07T17:27:32",
+            "activityType": {"typeKey": "virtual_ride"},
+            "duration": 427,
+            "averageHR": 126,
+            "maxHR": 154,
+            "activityTrainingLoad": 29.139,
+            "aerobicTrainingEffect": 2.3,
+            "anaerobicTrainingEffect": 0.4,
+        },
+    ]
+
+    normalized = normalize_activities(raw)
+
+    assert [item.activity_id for item in normalized] == [24272779145]
+    assert normalized[0].avg_hr == 126.0
+
+
 def test_normalize_activities_keeps_two_complete_overlapping_sessions():
     raw = [
         {

@@ -164,19 +164,14 @@ def _trimp_inputs_ready(activity: ActivityMetrics) -> bool:
     return activity.avg_hr is not None and activity.duration_minutes > 0
 
 
-def _same_shadow_session(left: ActivityMetrics, right: ActivityMetrics) -> bool:
-    """Return whether two IDs look like the same cross-service activity session.
-
-    Some connected services create a second Garmin activity record for a workout
-    that already exists. The shadow often has a new activity ID but no heart-rate
-    data. Only near-identical sessions in the same activity family are considered,
-    and suppression is allowed only when exactly one copy has the TRIMP inputs.
-    """
+def _same_shadow_session_window(
+    left: ActivityMetrics,
+    right: ActivityMetrics,
+) -> bool:
+    """Return whether two IDs fall inside one conservative session window."""
     if left.calendar_date != right.calendar_date:
         return False
     if _activity_family(left.activity_type) != _activity_family(right.activity_type):
-        return False
-    if _trimp_inputs_ready(left) == _trimp_inputs_ready(right):
         return False
 
     left_start = left.start_time.replace(tzinfo=None)
@@ -195,25 +190,24 @@ def _same_shadow_session(left: ActivityMetrics, right: ActivityMetrics) -> bool:
 def _suppress_incomplete_shadow_sessions(
     activities: Iterable[ActivityMetrics],
 ) -> list[ActivityMetrics]:
-    """Keep the TRIMP-capable copy of a near-identical duplicate session."""
-    kept: list[ActivityMetrics] = []
-    for activity in activities:
-        shadow_index = next(
-            (
-                index
-                for index, existing in enumerate(kept)
-                if _same_shadow_session(existing, activity)
-            ),
-            None,
-        )
-        if shadow_index is None:
-            kept.append(activity)
-            continue
+    """Drop incomplete shadow copies when a complete session counterpart exists.
 
-        existing = kept[shadow_index]
-        if _trimp_inputs_ready(activity) and not _trimp_inputs_ready(existing):
-            kept[shadow_index] = activity
-    return kept
+    Connected services can create multiple Garmin IDs for the same workout. Keep
+    every TRIMP-capable activity, including multiple genuine overlapping passes,
+    and suppress only incomplete records that match at least one complete session
+    in the same conservative time/duration/family window.
+    """
+    values = list(activities)
+    complete_sessions = [item for item in values if _trimp_inputs_ready(item)]
+    return [
+        activity
+        for activity in values
+        if _trimp_inputs_ready(activity)
+        or not any(
+            _same_shadow_session_window(activity, complete)
+            for complete in complete_sessions
+        )
+    ]
 
 
 def normalize_activities(
@@ -222,10 +216,11 @@ def normalize_activities(
     """Normalize and conservatively deduplicate Garmin activities.
 
     Same-ID duplicates prefer the richer copy. Distinct IDs are normally kept,
-    except when two near-identical sessions in the same activity family overlap
-    and exactly one lacks TRIMP inputs. That pattern is treated as a cross-service
-    shadow record so an incomplete import cannot invalidate an otherwise complete
-    Fitness day or be double-counted beside the real recorded workout.
+    except when incomplete near-identical sessions in the same activity family
+    overlap a TRIMP-capable counterpart. Every complete activity is preserved;
+    only incomplete cross-service shadow records are suppressed so they cannot
+    invalidate an otherwise complete Fitness day or be double-counted beside the
+    real recorded workout.
     """
     by_id: dict[int, ActivityMetrics] = {}
     for raw in activities:
