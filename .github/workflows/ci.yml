@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master, feature/garmin-fitness, feature/garmin-fitness-handoff]
+    branches: [main, master, dev, beta, feature/garmin-fitness, feature/garmin-fitness-handoff]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, beta, dev]
   workflow_dispatch:
 
 jobs:
