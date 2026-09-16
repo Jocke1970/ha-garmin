@@ -124,6 +124,7 @@ def _calculate(
             resting_hr is None
             or not math.isfinite(resting_hr)
             or resting_hr < 0
+            or user_max_hr is None
             or not _positive(user_max_hr)
             or user_max_hr <= resting_hr
             or sex not in ("male", "female")
@@ -135,22 +136,32 @@ def _calculate(
     if method == "power":
         # Normalized power is necessary for this interval-sensitive estimate;
         # mean power is intentionally NOT silently substituted.
-        if not _positive(activity.normalized_power):
+        if activity.normalized_power is None or not _positive(activity.normalized_power):
             return None, "missing_or_invalid_normalized_power"
-        if not _positive(ftp_watts):
+        if ftp_watts is None or not _positive(ftp_watts):
             return None, "missing_or_invalid_ftp"
-        tss = activity.duration_minutes / 60.0 * (activity.normalized_power / ftp_watts) ** 2 * 100.0
+        tss = (
+            activity.duration_minutes
+            / 60.0
+            * (activity.normalized_power / ftp_watts) ** 2
+            * 100.0
+        )
         return round(tss, 3), "ok"
 
     if method == "pace":
-        if not _positive(activity.distance_meters):
+        if activity.distance_meters is None or not _positive(activity.distance_meters):
             return None, "missing_or_invalid_distance"
-        if not _positive(threshold_speed_mps):
+        if threshold_speed_mps is None or not _positive(threshold_speed_mps):
             return None, "missing_or_invalid_threshold_speed"
         speed_mps = activity.distance_meters / (activity.duration_minutes * 60.0)
         # EXPERIMENTAL speed-based proxy. Not calibrated against TRIMP or TSS;
         # distance-based pace does not account for grade, terrain or wind.
-        proxy = activity.duration_minutes / 60.0 * (speed_mps / threshold_speed_mps) ** 2 * 100.0
+        proxy = (
+            activity.duration_minutes
+            / 60.0
+            * (speed_mps / threshold_speed_mps) ** 2
+            * 100.0
+        )
         return round(proxy, 3), "uncalibrated_pace_proxy"
 
     raise ValueError("Unknown load-priority method")
