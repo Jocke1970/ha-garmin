@@ -85,7 +85,8 @@ def test_zero_garmin_load_is_valid_not_missing():
 def test_running_pace_needs_explicit_threshold_and_is_marked_uncalibrated():
     result = preview_activity_load(_activity("running"), threshold_speed_mps=3.0)
     assert result.selected_method == "pace"
-    assert result.value == pytest.approx(50.0)
+    # 3 km / 30 min = 1.6667 m/s; 0.5 h * (1.6667 / 3)^2 * 100.
+    assert result.value == pytest.approx(15.432, abs=0.001)
     assert result.unit == "pace_proxy_unvalidated"
     assert result.attempts[0].reason == "uncalibrated_pace_proxy"
     assert not result.canonical_compatible
