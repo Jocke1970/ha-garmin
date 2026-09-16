@@ -7,6 +7,9 @@ GARMIN_CONNECT_API = f"{GARMIN_CONNECT}/gc-api"
 # User/Profile endpoints
 USER_PROFILE_URL = f"{GARMIN_CONNECT_API}/userprofile-service/socialProfile"
 USER_SUMMARY_URL = f"{GARMIN_CONNECT_API}/usersummary-service/usersummary/daily"
+USER_STATS_DAILY_URL = f"{GARMIN_CONNECT_API}/userstats-service/wellness/daily"
+RESTING_HEART_RATE_METRIC_ID = 60
+RESTING_HEART_RATE_METRIC_KEY = "WELLNESS_RESTING_HEART_RATE"
 
 # Activity endpoints
 ACTIVITIES_URL = (

@@ -80,6 +80,7 @@ class TestGarminClient:
         old_activity = {
             "activityId": 42,
             "activityName": "Winter Run",
+            "deviceId": 3511528293,
             "activityType": {"typeKey": "running"},
             "startTimeGMT": "2024-01-01T07:00:00",
             "hasPolyline": False,
@@ -101,7 +102,9 @@ class TestGarminClient:
 
         mock_acts.assert_awaited_once_with(0, 10)
         assert data["lastActivity"]["activityId"] == 42
+        assert data["lastActivity"]["deviceId"] == 3511528293
         assert len(data["lastActivities"]) == 1
+        assert data["lastActivities"][0]["deviceId"] == 3511528293
 
     async def test_fetch_activity_data_merges_ebike_fields(self):
         """Test fetch_activity_data merges e-bike fields from the summary endpoint (#527)."""
@@ -383,6 +386,24 @@ class TestGarminClient:
         assert len(devices) == 1
         assert devices[0]["displayName"] == "Forerunner 955"
         assert devices[0]["batteryLevel"] == 85
+
+    def test_trim_device_keeps_battery_fields(self):
+        """Registered-device trim must retain Garmin battery level and status."""
+        from ha_garmin.client import _trim_device
+
+        trimmed = _trim_device(
+            {
+                "deviceId": 123,
+                "displayName": "Fenix 7 Pro",
+                "batteryLevel": 67,
+                "batteryStatus": "GOOD",
+                "someCapabilityFlag": True,
+            }
+        )
+
+        assert trimmed["batteryLevel"] == 67
+        assert trimmed["batteryStatus"] == "GOOD"
+        assert "someCapabilityFlag" not in trimmed
 
     async def test_get_device_solar_data(self):
         """Test get_device_solar_data unwraps deviceSolarInput."""

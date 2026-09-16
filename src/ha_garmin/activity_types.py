@@ -24,6 +24,7 @@ from .client import GarminClient as _BaseGarminClient
 from .client import _validate_positive_int
 from .const import GARMIN_CONNECT_API, GEAR_URL
 from .exceptions import GarminConnectError
+from .gear import build_gear_source_records
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -408,4 +409,7 @@ class GarminClient(_BaseGarminClient):
                     gear_stat["lastActivity"] = dict(last_activity)
 
         data["activityTypes"] = activity_types
+        data["gearRecords"] = build_gear_source_records(
+            data, self._recent_activities_raw
+        )
         return data

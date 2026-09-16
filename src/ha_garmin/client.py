@@ -112,6 +112,7 @@ ACTIVITY_ESSENTIAL_KEYS = {
     # Identity
     "activityId",
     "activityName",
+    "deviceId",
     # Time
     "startTimeLocal",
     "startTimeGMT",
@@ -213,6 +214,13 @@ DEVICE_ESSENTIAL_KEYS = {
     "primary",
     "primaryActivityTrackerIndicator",
     "deviceCategories",
+    "deviceTypePk",
+    "deviceTypeName",
+    "deviceStatus",
+    "currentFirmwareVersion",
+    "actualProductSku",
+    "batteryLevel",
+    "batteryStatus",
     "wifi",
 }
 
