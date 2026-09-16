@@ -45,7 +45,9 @@ def test_walking_prefers_hr_even_with_power_and_garmin_load():
 
 
 def test_cycling_prefers_normalized_power_when_ftp_available():
-    result = preview_activity_load(_activity("virtual_ride"), ftp_watts=200, **_context())
+    result = preview_activity_load(
+        _activity("virtual_ride"), ftp_watts=200, **_context()
+    )
     assert result.sport == "cycling"
     assert result.selected_method == "power"
     assert result.value == pytest.approx(40.5)
@@ -72,7 +74,12 @@ def test_later_garmin_fallback_when_other_sources_lack_context():
     result = preview_activity_load(activity)
     assert result.selected_method == "garmin"
     assert result.value == 14.4
-    assert [attempt.available for attempt in result.attempts] == [False, False, False, True]
+    assert [attempt.available for attempt in result.attempts] == [
+        False,
+        False,
+        False,
+        True,
+    ]
 
 
 def test_zero_garmin_load_is_valid_not_missing():
@@ -110,9 +117,7 @@ def test_configurable_sport_priority_can_prefer_hr_over_power():
 
 
 def test_manual_override_is_strict_without_hidden_fallback():
-    result = preview_activity_load(
-        _activity("cycling"), override="power", **_context()
-    )
+    result = preview_activity_load(_activity("cycling"), override="power", **_context())
     assert result.selected_method is None
     assert result.value is None
     assert len(result.attempts) == 1
@@ -121,7 +126,10 @@ def test_manual_override_is_strict_without_hidden_fallback():
 
 def test_missing_all_sources_never_becomes_fake_rest_day():
     activity = replace(
-        _activity("walking"), avg_hr=None, distance_meters=None, garmin_training_load=None
+        _activity("walking"),
+        avg_hr=None,
+        distance_meters=None,
+        garmin_training_load=None,
     )
     result = preview_activity_load(activity)
     assert result.selected_method is None
