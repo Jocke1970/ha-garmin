@@ -136,7 +136,9 @@ def _calculate(
     if method == "power":
         # Normalized power is necessary for this interval-sensitive estimate;
         # mean power is intentionally NOT silently substituted.
-        if activity.normalized_power is None or not _positive(activity.normalized_power):
+        if activity.normalized_power is None or not _positive(
+            activity.normalized_power
+        ):
             return None, "missing_or_invalid_normalized_power"
         if ftp_watts is None or not _positive(ftp_watts):
             return None, "missing_or_invalid_ftp"
