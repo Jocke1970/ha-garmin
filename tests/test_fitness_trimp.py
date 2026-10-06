@@ -50,9 +50,14 @@ def test_trimp_input_coverage_reports_missing_fields():
     assert coverage.coverage_percent == 25.0
 
 
-def test_compute_trimp_known_value():
+def test_compute_trimp_known_male_value():
     value = compute_trimp(_activity(1), resting_hr=60, user_max_hr=180, sex="male")
-    assert value == pytest.approx(143.866, abs=0.001)
+    assert value == pytest.approx(92.074, abs=0.001)
+
+
+def test_compute_trimp_known_female_value():
+    value = compute_trimp(_activity(1), resting_hr=60, user_max_hr=180, sex="female")
+    assert value == pytest.approx(104.730, abs=0.001)
 
 
 def test_compute_trimp_preserves_zero_intensity():
