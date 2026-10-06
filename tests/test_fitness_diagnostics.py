@@ -9,7 +9,7 @@ from ha_garmin.fitness import (
 
 
 def test_algorithm_version_is_explicit():
-    assert GARMIN_FITNESS_ALGORITHM_VERSION == 1
+    assert GARMIN_FITNESS_ALGORITHM_VERSION == 2
 
 
 def test_source_coverage_comparison_is_side_by_side_without_selection():
