@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote, urlsplit
@@ -113,6 +114,8 @@ ACTIVITY_ESSENTIAL_KEYS = {
     "activityId",
     "activityName",
     "deviceId",
+    "linked_gear",
+    "linked_gear_count",
     # Time
     "startTimeLocal",
     "startTimeGMT",
@@ -372,6 +375,105 @@ def _trim_sensor(sensor: dict[str, Any]) -> dict[str, Any]:
     """Trim and normalize a recent ANT+/BLE sensor payload."""
     trimmed = {k: v for k, v in sensor.items() if k in SENSOR_ESSENTIAL_KEYS}
     return _convert_datetime_fields(trimmed)
+
+
+_GENERIC_GEAR_NAMES = {"", "unknown", "other"}
+
+
+def _activity_gear_display_name(
+    item: dict[str, Any], brand: str, model: str, custom: str
+) -> str:
+    """Prefer a useful Gear name over Garmin's generic labels."""
+    for candidate in (
+        item.get("displayName"),
+        item.get("gearName"),
+        item.get("name"),
+    ):
+        text = str(candidate or "").strip()
+        if text.lower() not in _GENERIC_GEAR_NAMES:
+            return text
+    if custom:
+        return custom
+    return f"{brand} {model}".strip() or "Unknown"
+
+
+def _normalize_activity_gear(raw: Any) -> list[dict[str, Any]]:
+    """Normalize Gear associated with one Garmin activity."""
+    if isinstance(raw, list):
+        items = raw
+    elif isinstance(raw, dict):
+        nested = next(
+            (
+                raw.get(key)
+                for key in ("gear", "items", "results")
+                if isinstance(raw.get(key), list)
+            ),
+            None,
+        )
+        if nested is not None:
+            items = nested
+        elif any(
+            key in raw for key in ("uuid", "gearUuid", "gearUUID", "gear_uuid")
+        ):
+            items = [raw]
+        else:
+            items = []
+    else:
+        items = []
+
+    normalized: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        gear_uuid = (
+            item.get("uuid")
+            or item.get("gearUuid")
+            or item.get("gearUUID")
+            or item.get("gear_uuid")
+        )
+        if not gear_uuid:
+            continue
+
+        brand = str(
+            item.get("gearMakeName")
+            or item.get("gearBrand")
+            or item.get("brand")
+            or ""
+        ).strip()
+        model = str(
+            item.get("gearModelName")
+            or item.get("gearModel")
+            or item.get("model")
+            or ""
+        ).strip()
+        custom = str(
+            item.get("customMakeModel") or item.get("custom_make_model") or ""
+        ).strip()
+        gear_type = (
+            item.get("gearTypeName")
+            or item.get("gearType")
+            or item.get("gear_type")
+            or ""
+        )
+        if isinstance(gear_type, dict):
+            gear_type = gear_type.get("typeKey") or gear_type.get("name") or ""
+
+        normalized.append(
+            {
+                "gear_uuid": str(gear_uuid),
+                "name": _activity_gear_display_name(item, brand, model, custom),
+                "gear_type": str(gear_type),
+                "brand": brand,
+                "model": model,
+                "custom_make_model": custom,
+            }
+        )
+
+    return normalized
+
+
+_ACTIVITY_GEAR_CACHE_TTL_SECONDS = 30 * 60
 
 
 def _is_cycling_activity(activity: dict[str, Any]) -> bool:
@@ -743,6 +845,11 @@ class GarminClient:
         self._profile_cache: UserProfile | None = None
         # (activity_id, fields, consecutive_empty_polls)
         self._ebike_fields_cache: tuple[int, dict[str, Any], int] | None = None
+        # Activity-specific Gear associations are stable enough to cache between
+        # normal coordinator polls, but remain bounded so newly linked Gear appears.
+        self._activity_gear_cache: dict[
+            int, tuple[float, list[dict[str, Any]]]
+        ] = {}
 
     def _get_url(self, url: str) -> str:
         """Resolve URL to correct connectapi domain."""
@@ -1389,6 +1496,35 @@ class GarminClient:
         params = {"userProfilePk": str(user_profile_id)}
         data = await self._request("GET", GEAR_URL, params=params)
         return data if isinstance(data, list) else []
+
+    async def get_activity_gear(
+        self, activity_id: int
+    ) -> list[dict[str, Any]]:
+        """Get normalized Gear associated with one Garmin activity.
+
+        Results are cached per activity for 30 minutes so the normal Home
+        Assistant activity polling interval does not repeatedly hit Garmin's
+        per-activity Gear lookup.
+        """
+        validated_activity_id = _validate_positive_int(activity_id, "activity_id")
+        now = time.monotonic()
+        cached = self._activity_gear_cache.get(validated_activity_id)
+        if cached is not None and now - cached[0] < _ACTIVITY_GEAR_CACHE_TTL_SECONDS:
+            return [dict(item) for item in cached[1]]
+
+        raw = await self._request(
+            "GET",
+            GEAR_URL,
+            params={"activityId": str(validated_activity_id)},
+        )
+        normalized = _normalize_activity_gear(raw)
+        self._activity_gear_cache[validated_activity_id] = (now, normalized)
+
+        for cached_id, (stored_at, _) in list(self._activity_gear_cache.items()):
+            if now - stored_at >= _ACTIVITY_GEAR_CACHE_TTL_SECONDS:
+                self._activity_gear_cache.pop(cached_id, None)
+
+        return [dict(item) for item in normalized]
 
     async def get_gear_stats(self, gear_uuid: str) -> dict[str, Any]:
         """Get legacy gear statistics."""
@@ -2464,7 +2600,8 @@ class GarminClient:
 
         API calls: get_activities, get_activity_details,
                    get_activity_hr_in_timezones, get_workouts (4 calls),
-                   plus get_activity for rides (e-bike fields, #527)
+                   plus get_activity for rides (e-bike fields, #527) and a
+                   cached get_activity_gear lookup for the newest activity
 
         target_date is kept for signature compatibility; activities are
         fetched by recency (newest 10), not by date.
@@ -2506,6 +2643,31 @@ class GarminClient:
                 )
                 if hr_zones:
                     last_activity["hrTimeInZones"] = hr_zones
+
+            # Fetch Gear linked to the newest activity. This is optional
+            # enrichment: a Garmin API failure must not hide normal activity data.
+            if activity_id:
+                try:
+                    linked_gear = await self.get_activity_gear(int(activity_id))
+                except GarminAuthError:
+                    raise
+                except (GarminAPIError, GarminRateLimitError) as err:
+                    _LOGGER.debug(
+                        "Failed to fetch Gear for activity %s: %s",
+                        activity_id,
+                        err,
+                    )
+                else:
+                    last_activity["linked_gear"] = linked_gear
+                    last_activity["linked_gear_count"] = len(linked_gear)
+                    for recent_activity in recent_activities:
+                        if (
+                            isinstance(recent_activity, dict)
+                            and recent_activity.get("activityId") == activity_id
+                        ):
+                            recent_activity["linked_gear"] = linked_gear
+                            recent_activity["linked_gear_count"] = len(linked_gear)
+                            break
 
         # Workouts
         workouts = await self._safe_call(self.get_workouts, 0, 10)

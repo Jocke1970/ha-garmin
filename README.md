@@ -121,23 +121,27 @@ Optimized methods that group related API calls for Home Assistant coordinators:
 
 > `fetch_gear_data()` also performs a best-effort activity-type hierarchy bootstrap when its 24-hour cache is stale. Normal recent activity fetches teach the registry at no additional API cost.
 
-## Gear and Activity Type Enrichment
+## Gear and Activity Enrichment
 
-`ha-garmin` enriches Gear from the existing Activity flow rather than polling every Gear item for history.
+`ha-garmin` exposes a public `get_activity_gear(activity_id)` method for the
+Gear associated with one Garmin activity. The response is normalized to stable,
+compact fields: Gear UUID, useful display name, Gear type, brand, model and
+custom make/model.
 
-The dynamic Activity Type Registry stores Garmin's stable `typeId`, `typeKey`, and `parentTypeId` fields. It learns types for free from normal activity responses and uses Garmin's canonical activity-type hierarchy as a best-effort 24-hour cached bootstrap. This resolves Gear defaults such as `type_25` into stable keys such as `indoor_cycling` while still preserving the hierarchy in `defaultForActivityDetails`.
-
-The Activity fetch also scans its current recent-activity window newest-to-oldest and calls `get_activity_gear(activity_id)` for activities whose Gear mapping is not already cached. Matching Gear receives a compact `lastActivity` payload containing the activity ID, name, type metadata, UTC start time, distance, and duration when available.
+`fetch_activity_data()` enriches the newest activity with `linked_gear` and
+`linked_gear_count`. The same values are copied onto the matching entry in the
+recent-activity list.
 
 Request behaviour is intentionally bounded:
 
-- activity-to-Gear results are cached per activity ID;
-- after the recent window is primed, normal operation is roughly one additional Gear lookup when a new activity appears;
-- the newest activity can retry an empty Gear association up to three times to allow Garmin propagation delay;
-- older empty results are treated as stable after one lookup;
-- auxiliary activity-type or Gear lookup failures do not fail the primary coordinator data.
+- activity-to-Gear results are cached per activity ID for 30 minutes;
+- cached empty results are reused during that window;
+- a normal Garmin API failure in this optional lookup does not hide the primary
+  activity payload;
+- authentication errors still propagate normally.
 
-The current Home Assistant integration uses a 10-activity recent window for bootstrap/backfill. Gear last used outside that window can therefore have historical usage statistics without a cached `lastActivity` until it is used again.
+This keeps the Home Assistant integration on the public client API instead of
+calling Garmin's private request helper directly.
 
 ## Write / Action Methods
 
