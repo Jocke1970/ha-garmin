@@ -1,3 +1,5 @@
+> **Historical / superseded note (2026-10-07):** This describes the original isolated Load Priority preview. Current Home Assistant runtime uses Load Priority for planning-only intensity classification (`planning_policy_version: 2`) while preserving canonical TRIMP history. The source-selection API remains useful diagnostic context, but the statement 'not integrated into Home Assistant' is obsolete.
+
 # Garmin Fitness — Load Priority preview (2026-09-16)
 
 **Status: experimental, read-only, not integrated into Home Assistant.**

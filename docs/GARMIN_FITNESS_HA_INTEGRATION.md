@@ -1,3 +1,5 @@
+> **Historical / superseded note (2026-10-07):** The Sprint 1 handoff is implemented. The writable-repository blocker and `feature/garmin-fitness` branch guidance are obsolete. Current development follows `dev → beta → main`; Garmin Connect 2026.10.0b2 is the current beta consumer.
+
 # Garmin Fitness — Home Assistant Integration Handoff
 
 > Status: design locked for Sprint 1 integration layer  

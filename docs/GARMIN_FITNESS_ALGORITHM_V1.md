@@ -1,3 +1,5 @@
+> **Historical / superseded note (2026-10-07):** This file defines the frozen algorithm-v1 baseline. Current runtime uses algorithm version 2, which corrects Banister TRIMP scaling with the sex-specific multiplicative coefficient. Keep this file for migration/history reference; do not use `algorithm_version = 1` as current runtime guidance.
+
 # Garmin Fitness — Training Algorithm v1
 
 > Algorithm version: `1`  

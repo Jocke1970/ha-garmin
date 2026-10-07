@@ -14,7 +14,7 @@ Python client for Garmin Connect API, designed for Home Assistant integration.
 - **Coordinator-based fetch** - optimized data fetching for Home Assistant multi-coordinator pattern
 - **Data transformations** - automatic unit conversions (seconds→minutes, grams→kg)
 - **Dynamic activity type registry** - learns Garmin `typeId`/`typeKey`/`parentTypeId` from normal activity data and refreshes the canonical hierarchy on a 24-hour cache
-- **Activity-driven Gear metadata** - maps recent activities to Gear with bounded/cached lookups instead of polling every Gear item
+- **Activity-driven Gear metadata** - maps recent activities to Gear with bounded/cached lookups instead of polling every Gear item; newest activity exposes compact `linked_gear` and `linked_gear_count` data
 
 ## Installation
 

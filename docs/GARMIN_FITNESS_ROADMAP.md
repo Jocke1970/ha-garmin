@@ -1,3 +1,5 @@
+> **Historical / superseded note (2026-10-07):** This is the original architecture roadmap. Sprint 1 and the `feature/garmin-fitness` branch are complete/superseded. Current status lives in `docs/GARMIN_FITNESS_CURRENT_STATUS.md` and release development follows `dev → beta → main`.
+
 # Garmin Fitness for Home Assistant
 
 > Status: planning / architecture baseline  
