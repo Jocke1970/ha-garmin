@@ -457,7 +457,9 @@ class GarminClient(_BaseGarminClient):
                             isinstance(activity, dict)
                             and activity.get("activityId") == raw_activity_id
                         ):
-                            activity["linked_gear"] = [dict(item) for item in linked_gear]
+                            activity["linked_gear"] = [
+                                dict(item) for item in linked_gear
+                            ]
                             activity["linked_gear_count"] = len(linked_gear)
                             break
 

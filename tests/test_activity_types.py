@@ -140,9 +140,7 @@ async def test_activity_fetch_exposes_normalized_linked_gear() -> None:
     ):
         base_fetch.return_value = {
             "lastActivity": {"activityId": 123, "activityName": "Morning ride"},
-            "lastActivities": [
-                {"activityId": 123, "activityName": "Morning ride"}
-            ],
+            "lastActivities": [{"activityId": 123, "activityName": "Morning ride"}],
         }
         gear_get.return_value = [
             {
@@ -171,9 +169,10 @@ async def test_activity_fetch_exposes_normalized_linked_gear() -> None:
     assert result["lastActivity"]["linked_gear"][1]["name"] == (
         "Bontrager Ion 200 RT Flare"
     )
-    assert result["lastActivities"][0]["linked_gear"] == result["lastActivity"][
-        "linked_gear"
-    ]
+    assert (
+        result["lastActivities"][0]["linked_gear"]
+        == result["lastActivity"]["linked_gear"]
+    )
 
 
 async def test_activity_fetch_exposes_empty_linked_gear_after_lookup() -> None:
