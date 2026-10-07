@@ -439,10 +439,12 @@ class GarminClient(_BaseGarminClient):
         last_activity = data.get("lastActivity")
         if isinstance(last_activity, dict):
             raw_activity_id = last_activity.get("activityId")
-            try:
-                activity_id = int(raw_activity_id)
-            except (TypeError, ValueError):
-                activity_id = 0
+            activity_id = 0
+            if isinstance(raw_activity_id, (int, str)):
+                try:
+                    activity_id = int(raw_activity_id)
+                except ValueError:
+                    activity_id = 0
 
             cached = self._activity_gear_cache.get(activity_id)
             if cached is not None:
