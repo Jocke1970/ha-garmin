@@ -1497,9 +1497,7 @@ class GarminClient:
         data = await self._request("GET", GEAR_URL, params=params)
         return data if isinstance(data, list) else []
 
-    async def get_activity_gear(
-        self, activity_id: int
-    ) -> list[dict[str, Any]]:
+    async def get_activity_gear(self, activity_id: int) -> list[dict[str, Any]]:
         """Get normalized Gear associated with one Garmin activity.
 
         Results are cached per activity for 30 minutes so the normal Home
