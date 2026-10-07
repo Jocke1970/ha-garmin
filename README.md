@@ -129,6 +129,11 @@ The dynamic Activity Type Registry stores Garmin's stable `typeId`, `typeKey`, a
 
 The Activity fetch also scans its current recent-activity window newest-to-oldest and calls `get_activity_gear(activity_id)` for activities whose Gear mapping is not already cached. Matching Gear receives a compact `lastActivity` payload containing the activity ID, name, type metadata, UTC start time, distance, and duration when available.
 
+The newest activity also exposes a compact `linked_gear` list plus
+`linked_gear_count` in Activity coordinator data. These fields preserve the
+activity-to-Gear association directly for Home Assistant consumers while the
+same cached lookup continues to drive Gear `lastActivity` metadata.
+
 Request behaviour is intentionally bounded:
 
 - activity-to-Gear results are cached per activity ID;

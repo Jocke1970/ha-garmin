@@ -77,6 +77,77 @@ def _normalise_activity_type(raw: dict[str, Any]) -> ActivityType | None:
     }
 
 
+_GENERIC_GEAR_NAMES = {"", "unknown", "other"}
+
+
+def _linked_gear_display_name(
+    item: dict[str, Any], brand: str, model: str, custom: str
+) -> str:
+    """Prefer a useful Gear name over Garmin's generic labels."""
+    for candidate in (
+        item.get("displayName"),
+        item.get("gearName"),
+        item.get("name"),
+    ):
+        text = str(candidate or "").strip()
+        if text.lower() not in _GENERIC_GEAR_NAMES:
+            return text
+    if custom:
+        return custom
+    return f"{brand} {model}".strip() or "Unknown"
+
+
+def _normalise_linked_gear(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return compact stable fields for Gear linked to one activity."""
+    normalized: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+
+        gear_uuid = (
+            item.get("uuid")
+            or item.get("gearUuid")
+            or item.get("gearUUID")
+            or item.get("gear_uuid")
+        )
+        if not gear_uuid:
+            continue
+
+        brand = str(
+            item.get("gearMakeName") or item.get("gearBrand") or item.get("brand") or ""
+        ).strip()
+        model = str(
+            item.get("gearModelName")
+            or item.get("gearModel")
+            or item.get("model")
+            or ""
+        ).strip()
+        custom = str(
+            item.get("customMakeModel") or item.get("custom_make_model") or ""
+        ).strip()
+        gear_type = (
+            item.get("gearTypeName")
+            or item.get("gearType")
+            or item.get("gear_type")
+            or ""
+        )
+        if isinstance(gear_type, dict):
+            gear_type = gear_type.get("typeKey") or gear_type.get("name") or ""
+
+        normalized.append(
+            {
+                "gear_uuid": str(gear_uuid),
+                "name": _linked_gear_display_name(item, brand, model, custom),
+                "gear_type": str(gear_type),
+                "brand": brand,
+                "model": model,
+                "custom_make_model": custom,
+            }
+        )
+
+    return normalized
+
+
 def _normalise_activity_start(value: Any) -> str | None:
     """Return a UTC ISO timestamp suitable for Home Assistant attributes."""
     if not isinstance(value, str) or not value:
@@ -364,6 +435,36 @@ class GarminClient(_BaseGarminClient):
         """Fetch activity data and update activity-driven gear metadata."""
         data = await super().fetch_activity_data(target_date)
         await self._process_latest_activity_gear(self._recent_activities_raw)
+
+        last_activity = data.get("lastActivity")
+        if isinstance(last_activity, dict):
+            raw_activity_id = last_activity.get("activityId")
+            activity_id = 0
+            if isinstance(raw_activity_id, (int, str)):
+                try:
+                    activity_id = int(raw_activity_id)
+                except ValueError:
+                    activity_id = 0
+
+            cached = self._activity_gear_cache.get(activity_id)
+            if cached is not None:
+                linked_gear = _normalise_linked_gear(cached[0])
+                last_activity["linked_gear"] = linked_gear
+                last_activity["linked_gear_count"] = len(linked_gear)
+
+                recent = data.get("lastActivities")
+                if isinstance(recent, list):
+                    for activity in recent:
+                        if (
+                            isinstance(activity, dict)
+                            and activity.get("activityId") == raw_activity_id
+                        ):
+                            activity["linked_gear"] = [
+                                dict(item) for item in linked_gear
+                            ]
+                            activity["linked_gear_count"] = len(linked_gear)
+                            break
+
         data["activityTypes"] = self._activity_types_as_list()
         return data
 

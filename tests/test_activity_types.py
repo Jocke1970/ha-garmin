@@ -127,6 +127,77 @@ async def test_activity_fetch_maps_latest_gear_once() -> None:
     assert client._last_activity_by_gear["gear-shoes"] == expected
 
 
+async def test_activity_fetch_exposes_normalized_linked_gear() -> None:
+    """Latest activity exposes stable linked Gear attributes for HA consumers."""
+    client = _make_client()
+    client._recent_activities_raw = [_ride()]
+
+    with (
+        patch.object(
+            _BaseGarminClient, "fetch_activity_data", new_callable=AsyncMock
+        ) as base_fetch,
+        patch.object(client, "get_activity_gear", new_callable=AsyncMock) as gear_get,
+    ):
+        base_fetch.return_value = {
+            "lastActivity": {"activityId": 123, "activityName": "Morning ride"},
+            "lastActivities": [{"activityId": 123, "activityName": "Morning ride"}],
+        }
+        gear_get.return_value = [
+            {
+                "uuid": "17a4e95158cf47a3af83655d90ff9d8c",
+                "displayName": "Stages Power L Shimano Ultegra R8100",
+                "gearTypeName": "Bike Component",
+                "gearMakeName": "Stages",
+                "gearModelName": "Stages Power L Shimano Ultegra R8100",
+            },
+            {
+                "uuid": "540c8eeacead401bb7101e870319387e",
+                "displayName": "Unknown",
+                "customMakeModel": "Bontrager Ion 200 RT Flare",
+                "gearTypeName": "Bike Component",
+                "gearMakeName": "Bontrager",
+                "gearModelName": "Ion 200 RT Flare",
+            },
+        ]
+
+        result = await client.fetch_activity_data()
+
+    assert result["lastActivity"]["linked_gear_count"] == 2
+    assert result["lastActivity"]["linked_gear"][0]["gear_uuid"] == (
+        "17a4e95158cf47a3af83655d90ff9d8c"
+    )
+    assert result["lastActivity"]["linked_gear"][1]["name"] == (
+        "Bontrager Ion 200 RT Flare"
+    )
+    assert (
+        result["lastActivities"][0]["linked_gear"]
+        == result["lastActivity"]["linked_gear"]
+    )
+
+
+async def test_activity_fetch_exposes_empty_linked_gear_after_lookup() -> None:
+    """A successful no-Gear result is explicit without breaking activity data."""
+    client = _make_client()
+    client._recent_activities_raw = [_ride()]
+
+    with (
+        patch.object(
+            _BaseGarminClient, "fetch_activity_data", new_callable=AsyncMock
+        ) as base_fetch,
+        patch.object(client, "get_activity_gear", new_callable=AsyncMock) as gear_get,
+    ):
+        base_fetch.return_value = {
+            "lastActivity": {"activityId": 123},
+            "lastActivities": [{"activityId": 123}],
+        }
+        gear_get.return_value = []
+
+        result = await client.fetch_activity_data()
+
+    assert result["lastActivity"]["linked_gear"] == []
+    assert result["lastActivity"]["linked_gear_count"] == 0
+
+
 async def test_activity_fetch_scans_recent_window_for_each_gears_latest_use() -> None:
     """Older recent activities backfill gear without overriding newer matches."""
     client = _make_client()
