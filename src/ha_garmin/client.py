@@ -55,7 +55,7 @@ from .const import (
     WEIGHT_LATEST_URL,
     WORKOUTS_URL,
 )
-from .exceptions import GarminAPIError, GarminAuthError, GarminRateLimitError
+from .exceptions import GarminAPIError, GarminAuthError, GarminConnectError, GarminRateLimitError
 from .models import UserProfile
 
 if TYPE_CHECKING:
@@ -412,9 +412,7 @@ def _normalize_activity_gear(raw: Any) -> list[dict[str, Any]]:
         )
         if nested is not None:
             items = nested
-        elif any(
-            key in raw for key in ("uuid", "gearUuid", "gearUUID", "gear_uuid")
-        ):
+        elif any(key in raw for key in ("uuid", "gearUuid", "gearUUID", "gear_uuid")):
             items = [raw]
         else:
             items = []
@@ -436,10 +434,7 @@ def _normalize_activity_gear(raw: Any) -> list[dict[str, Any]]:
             continue
 
         brand = str(
-            item.get("gearMakeName")
-            or item.get("gearBrand")
-            or item.get("brand")
-            or ""
+            item.get("gearMakeName") or item.get("gearBrand") or item.get("brand") or ""
         ).strip()
         model = str(
             item.get("gearModelName")
@@ -847,9 +842,7 @@ class GarminClient:
         self._ebike_fields_cache: tuple[int, dict[str, Any], int] | None = None
         # Activity-specific Gear associations are stable enough to cache between
         # normal coordinator polls, but remain bounded so newly linked Gear appears.
-        self._activity_gear_cache: dict[
-            int, tuple[float, list[dict[str, Any]]]
-        ] = {}
+        self._activity_gear_cache: dict[int, tuple[float, list[dict[str, Any]]]] = {}
 
     def _get_url(self, url: str) -> str:
         """Resolve URL to correct connectapi domain."""
@@ -2647,9 +2640,7 @@ class GarminClient:
             if activity_id:
                 try:
                     linked_gear = await self.get_activity_gear(int(activity_id))
-                except GarminAuthError:
-                    raise
-                except (GarminAPIError, GarminRateLimitError) as err:
+                except GarminConnectError as err:
                     _LOGGER.debug(
                         "Failed to fetch Gear for activity %s: %s",
                         activity_id,
