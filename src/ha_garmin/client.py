@@ -55,7 +55,12 @@ from .const import (
     WEIGHT_LATEST_URL,
     WORKOUTS_URL,
 )
-from .exceptions import GarminAPIError, GarminAuthError, GarminConnectError, GarminRateLimitError
+from .exceptions import (
+    GarminAPIError,
+    GarminAuthError,
+    GarminConnectError,
+    GarminRateLimitError,
+)
 from .models import UserProfile
 
 if TYPE_CHECKING:
